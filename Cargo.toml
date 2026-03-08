@@ -1,5 +1,5 @@
 [workspace]
-members = ["cv-core", "cv-capture", "cv-render", "app"]
+members = ["crates/cv-core", "crates/cv-capture", "crates/cv-render", "crates/app"]
 resolver = "2"
 
 [workspace.dependencies]
