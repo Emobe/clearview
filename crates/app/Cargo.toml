@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cv-core = { path = "../cv-core" }
+cv-capture = { path = "../cv-capture" }
+cv-render = { path = "../cv-render" }
+eframe = { workspace = true }
+egui = { workspace = true }
+windows = { workspace = true }

@@ -1,0 +1,8 @@
+[package]
+name = "cv-capture"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cv-core = { path = "../cv-core" }
+windows = { workspace = true }
