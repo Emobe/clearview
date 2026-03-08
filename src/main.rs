@@ -67,7 +67,8 @@ fn main() -> eframe::Result {
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([320.0, 220.0])
-                .with_resizable(false),
+                .with_resizable(false)
+                .with_always_on_top(),
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(app::ClearViewApp::new(cc, state_for_egui)))),

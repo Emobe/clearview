@@ -21,9 +21,9 @@ use windows::{
             RegisterClassExW, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity,
             ShowWindow, TranslateMessage, WDA_EXCLUDEFROMCAPTURE, CURSOR_SHOWING, CURSORINFO,
             DI_NORMAL, HICON, HTTRANSPARENT, IDC_ARROW, MSG, SM_CXCURSOR, SM_CXSCREEN,
-            SM_CYCURSOR, SM_CYSCREEN, SW_SHOW, WM_DESTROY, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
-            WS_VISIBLE,
+            SM_CYCURSOR, SM_CYSCREEN, SW_HIDE, SW_SHOW, WM_DESTROY, WM_NCHITTEST, WM_TIMER,
+            WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+            WS_POPUP,
         },
     },
 };
@@ -38,6 +38,8 @@ struct WindowData {
     smooth_x: f32,
     smooth_y: f32,
     last_tick: Instant,
+    /// Tracks whether the window is currently shown so we only call ShowWindow on changes.
+    visible: bool,
 }
 
 thread_local! {
@@ -57,6 +59,7 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
             smooth_x: screen_w as f32 / 2.0,
             smooth_y: screen_h as f32 / 2.0,
             last_tick: Instant::now(),
+            visible: false,
         });
     });
 
@@ -78,7 +81,7 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
             WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
             class_name,
             w!("clear-view"),
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP, // hidden until enabled
             0,
             0,
             screen_w,
@@ -92,7 +95,6 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
 
         SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).ok();
         SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
-        let _ = ShowWindow(hwnd, SW_SHOW);
         SetTimer(Some(hwnd), 1, 16, None);
 
         let mut msg = MSG::default();
@@ -116,9 +118,32 @@ unsafe extern "system" fn wnd_proc(
         },
         WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
         WM_TIMER => unsafe {
-            let hdc = GetDC(Some(hwnd));
-            draw(hdc);
-            ReleaseDC(Some(hwnd), hdc);
+            let enabled = WIN_DATA
+                .with(|d| {
+                    let b = d.borrow();
+                    Some(b.as_ref()?.app_state.read().enabled)
+                })
+                .unwrap_or(false);
+
+            // Show/hide window when enabled state changes.
+            let was_visible = WIN_DATA
+                .with(|d| d.borrow().as_ref().map(|w| w.visible))
+                .unwrap_or(false);
+
+            if enabled != was_visible {
+                WIN_DATA.with(|d| {
+                    if let Some(w) = d.borrow_mut().as_mut() {
+                        w.visible = enabled;
+                    }
+                });
+                let _ = ShowWindow(hwnd, if enabled { SW_SHOW } else { SW_HIDE });
+            }
+
+            if enabled {
+                let hdc = GetDC(Some(hwnd));
+                draw(hdc);
+                ReleaseDC(Some(hwnd), hdc);
+            }
             LRESULT(0)
         },
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -130,18 +155,14 @@ fn draw(hdc: windows::Win32::Graphics::Gdi::HDC) {
         let screen_w = GetSystemMetrics(SM_CXSCREEN);
         let screen_h = GetSystemMetrics(SM_CYSCREEN);
 
-        let (zoom, enabled, smooth_speed) = WIN_DATA
+        let (zoom, smooth_speed) = WIN_DATA
             .with(|d| {
                 let b = d.borrow();
                 let data = b.as_ref()?;
                 let s = data.app_state.read();
-                Some((s.zoom, s.enabled, s.smooth_speed))
+                Some((s.zoom, s.smooth_speed))
             })
-            .unwrap_or((2.0, false, 0.15));
-
-        if !enabled {
-            return;
-        }
+            .unwrap_or((2.0, 0.15));
 
         let mut cursor = windows::Win32::Foundation::POINT::default();
         let _ = GetCursorPos(&mut cursor);
