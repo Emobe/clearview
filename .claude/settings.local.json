@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git branch:*)",
+      "Bash(git:*)",
+      "Bash(cargo init:*)",
+      "Bash(cargo build:*)",
+      "Bash(xargs grep -l \"RegisterHotKey\")"
+    ]
+  }
+}
