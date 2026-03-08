@@ -1,9 +1,8 @@
+use cv_core::SharedState;
 use windows::Win32::UI::{
     Input::KeyboardAndMouse::{MOD_NOREPEAT, MOD_WIN, RegisterHotKey, VK_OEM_PLUS},
     WindowsAndMessaging::*,
 };
-
-use crate::state::SharedState;
 
 const HOTKEY_ID: i32 = 1;
 
@@ -25,6 +24,5 @@ pub fn hotkey_loop(state: SharedState) {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-
     }
 }

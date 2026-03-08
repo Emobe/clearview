@@ -1,4 +1,4 @@
-use crate::state::{Interpolation, SharedState};
+use cv_core::{Interpolation, SharedState};
 use eframe::egui;
 
 pub struct ClearViewApp {

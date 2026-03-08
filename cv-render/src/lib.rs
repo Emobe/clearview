@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     mem::size_of,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Instant,
 };
 
@@ -28,9 +28,7 @@ use windows::{
     },
 };
 
-use crate::{capture::Frame, state::SharedState};
-
-pub type FrameState = Arc<Mutex<Option<Arc<Frame>>>>;
+use cv_core::{Frame, FrameState, SharedState};
 
 struct WindowData {
     frame_state: FrameState,

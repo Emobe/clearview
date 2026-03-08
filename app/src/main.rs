@@ -1,8 +1,5 @@
 mod app;
-mod capture;
 mod hotkey;
-mod renderer;
-mod state;
 
 use std::sync::{Arc, Mutex};
 
@@ -15,14 +12,14 @@ fn main() -> eframe::Result {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    let shared = state::new_shared();
-    let frame_state: renderer::FrameState = Arc::new(Mutex::new(None));
+    let shared = cv_core::new_shared();
+    let frame_state: cv_core::FrameState = Arc::new(Mutex::new(None));
 
     // Capture thread: DXGI → CPU Vec<u8> → frame_state
     {
         let frame_state = frame_state.clone();
         std::thread::spawn(move || {
-            let mut capturer = match capture::Capturer::new() {
+            let mut capturer = match cv_capture::Capturer::new() {
                 Ok(c) => c,
                 Err(e) => { eprintln!("[capture] init failed: {e}"); return; }
             };
@@ -48,7 +45,7 @@ fn main() -> eframe::Result {
         let frame_state = frame_state.clone();
         let app_state = shared.clone();
         std::thread::spawn(move || {
-            renderer::run_overlay(frame_state, app_state);
+            cv_render::run_overlay(frame_state, app_state);
         });
     }
 

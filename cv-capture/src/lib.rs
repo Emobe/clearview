@@ -1,3 +1,4 @@
+use cv_core::Frame;
 use windows::{
     core::Interface,
     Win32::Graphics::{
@@ -14,13 +15,6 @@ use windows::{
         },
     },
 };
-
-pub struct Frame {
-    pub width: u32,
-    pub height: u32,
-    /// Raw BGRA8 pixel data, row-major.
-    pub data: Vec<u8>,
-}
 
 struct D3dCtx {
     device: ID3D11Device,

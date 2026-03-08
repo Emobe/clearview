@@ -65,6 +65,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "cv-capture",
+ "cv-core",
+ "cv-render",
+ "eframe",
+ "egui",
+ "windows",
+]
+
+[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -249,17 +261,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clear-view"
-version = "0.1.0"
-dependencies = [
- "crossbeam-channel",
- "eframe",
- "egui",
- "parking_lot",
- "windows",
-]
-
-[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -347,15 +348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -366,6 +358,29 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "cv-capture"
+version = "0.1.0"
+dependencies = [
+ "cv-core",
+ "windows",
+]
+
+[[package]]
+name = "cv-core"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
+name = "cv-render"
+version = "0.1.0"
+dependencies = [
+ "cv-core",
+ "windows",
+]
 
 [[package]]
 name = "dispatch"

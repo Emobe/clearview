@@ -1,5 +1,12 @@
 use parking_lot::RwLock;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    /// Raw BGRA8 pixel data, row-major.
+    pub data: Vec<u8>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Interpolation {
@@ -37,6 +44,7 @@ impl Default for AppState {
 }
 
 pub type SharedState = Arc<RwLock<AppState>>;
+pub type FrameState = Arc<Mutex<Option<Arc<Frame>>>>;
 
 pub fn new_shared() -> SharedState {
     Arc::new(RwLock::new(AppState::default()))
