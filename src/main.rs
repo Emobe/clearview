@@ -1,83 +1,75 @@
 mod app;
 mod capture;
 mod hotkey;
-mod overlay;
 mod renderer;
 mod state;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex};
 
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 
 fn main() -> eframe::Result {
-    // DPI awareness must be set before any window is created.
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
     let shared = state::new_shared();
-    let running = Arc::new(AtomicBool::new(true));
+    let frame_state: renderer::FrameState = Arc::new(Mutex::new(None));
 
-    // Overlay window (created before eframe takes over the main thread)
-    let overlay = overlay::create_overlay().expect("failed to create overlay window");
-
-    // D3D11 device shared between capture and render threads
-    let (device, ctx) = renderer::create_d3d11_device().expect("failed to create D3D11 device");
-
-    // Channel: capture → render (capacity 1 so render always gets the freshest frame)
-    let (tx, rx) = crossbeam_channel::bounded::<
-        windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
-    >(1);
-
-    // Capture thread
+    // Capture thread: DXGI → CPU Vec<u8> → frame_state
     {
-        let device = device.clone();
-        let running = running.clone();
+        let frame_state = frame_state.clone();
         std::thread::spawn(move || {
-            capture::capture_loop(device, tx, running);
+            let mut capturer = match capture::Capturer::new() {
+                Ok(c) => c,
+                Err(e) => { eprintln!("[capture] init failed: {e}"); return; }
+            };
+            loop {
+                match capturer.next_frame(100) {
+                    Ok(Some(frame)) => {
+                        *frame_state.lock().unwrap() = Some(Arc::new(frame));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("[capture] {e} — reconnecting");
+                        if capturer.reconnect().is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
         });
     }
 
-    // Render thread — HWND is not Send, so we pass the raw isize and reconstruct inside.
+    // Renderer thread: GDI fullscreen window, reads frame_state + app state
     {
-        let hwnd_raw = overlay.0.0 as isize;
-        let device = device.clone();
+        let frame_state = frame_state.clone();
+        let app_state = shared.clone();
+        std::thread::spawn(move || {
+            renderer::run_overlay(frame_state, app_state);
+        });
+    }
+
+    // Hotkey thread: Win+= toggles enabled, shows/hides overlay
+    {
         let state = shared.clone();
-        let running = running.clone();
         std::thread::spawn(move || {
-            let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut _);
-            renderer::render_loop(hwnd, device, ctx, rx, state, running);
+            hotkey::hotkey_loop(state);
         });
     }
 
-    // Hotkey thread
-    {
-        let state = shared.clone();
-        let running = running.clone();
-        std::thread::spawn(move || {
-            hotkey::hotkey_loop(overlay, state, running);
-        });
-    }
-
-    // egui settings window — blocks until the user closes it
+    // egui settings panel on main thread
     let state_for_egui = shared.clone();
-    let result = eframe::run_native(
+    eframe::run_native(
         "clear-view settings",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([320.0, 200.0])
+                .with_inner_size([320.0, 220.0])
                 .with_resizable(false),
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(app::ClearViewApp::new(cc, state_for_egui)))),
-    );
-
-    running.store(false, Ordering::Relaxed);
-
-    result
+    )
 }

@@ -23,8 +23,6 @@ pub struct AppState {
     /// Lerp speed per logical 60 Hz tick (0.01–1.0).
     pub smooth_speed: f32,
     pub interpolation: Interpolation,
-    /// Smoothed mouse position in normalised screen coords (0..1).
-    pub viewport_center: [f32; 2],
 }
 
 impl Default for AppState {
@@ -34,7 +32,6 @@ impl Default for AppState {
             zoom: 2.0,
             smooth_speed: 0.15,
             interpolation: Interpolation::Bilinear,
-            viewport_center: [0.5, 0.5],
         }
     }
 }

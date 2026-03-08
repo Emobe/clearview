@@ -5,7 +5,9 @@
       "Bash(git:*)",
       "Bash(cargo init:*)",
       "Bash(cargo build:*)",
-      "Bash(xargs grep -l \"RegisterHotKey\")"
+      "Bash(xargs grep -l \"RegisterHotKey\")",
+      "Read(//c/Users/Anthony/cv3/**)",
+      "Read(//c/Users/Anthony/cv3//**)"
     ]
   }
 }

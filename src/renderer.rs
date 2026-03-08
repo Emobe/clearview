@@ -1,354 +1,252 @@
-use crossbeam_channel::Receiver;
+use std::{
+    cell::RefCell,
+    mem::size_of,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
 use windows::{
-    core::*,
+    core::w,
     Win32::{
-        Foundation::HWND,
-        Graphics::{
-            Direct3D::*,
-            Direct3D::Fxc::D3DCompile,
-            Direct3D11::*,
-            Dxgi::{Common::*, *},
+        Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+        Graphics::Gdi::{
+            CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject,
+            FillRect, GetDC, ReleaseDC, SelectObject, StretchBlt, BITMAPINFO, BITMAPINFOHEADER,
+            BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         },
-        UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, DrawIconEx, GetCursorInfo,
+            GetCursorPos, GetMessageW, GetSystemMetrics, LoadCursorW, LWA_ALPHA, PostQuitMessage,
+            RegisterClassExW, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity,
+            ShowWindow, TranslateMessage, WDA_EXCLUDEFROMCAPTURE, CURSOR_SHOWING, CURSORINFO,
+            DI_NORMAL, HICON, HTTRANSPARENT, IDC_ARROW, MSG, SM_CXCURSOR, SM_CXSCREEN,
+            SM_CYCURSOR, SM_CYSCREEN, SW_SHOW, WM_DESTROY, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW,
+            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+            WS_VISIBLE,
+        },
     },
 };
 
-use crate::state::SharedState;
+use crate::{capture::Frame, state::SharedState};
 
-#[repr(C)]
-struct Constants {
-    center: [f32; 2],
-    zoom: f32,
-    _pad: f32,
+pub type FrameState = Arc<Mutex<Option<Arc<Frame>>>>;
+
+struct WindowData {
+    frame_state: FrameState,
+    app_state: SharedState,
+    smooth_x: f32,
+    smooth_y: f32,
+    last_tick: Instant,
 }
 
-pub fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    let feature_levels = [D3D_FEATURE_LEVEL_11_0];
-    let mut device = None;
-    let mut ctx = None;
-    let mut level = D3D_FEATURE_LEVEL::default();
+thread_local! {
+    static WIN_DATA: RefCell<Option<WindowData>> = const { RefCell::new(None) };
+}
+
+/// Creates the fullscreen magnifier overlay and runs its message loop.
+/// Blocks until the window is destroyed.
+pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
+    let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+
+    WIN_DATA.with(|d| {
+        *d.borrow_mut() = Some(WindowData {
+            frame_state,
+            app_state,
+            smooth_x: screen_w as f32 / 2.0,
+            smooth_y: screen_h as f32 / 2.0,
+            last_tick: Instant::now(),
+        });
+    });
 
     unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            None,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&feature_levels),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            Some(&mut level),
-            Some(&mut ctx),
-        )?;
-    }
+        let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+        let class_name = w!("clear_view_overlay");
 
-    Ok((device.unwrap(), ctx.unwrap()))
-}
-
-/// Render loop — runs on a dedicated thread.
-pub fn render_loop(
-    hwnd: HWND,
-    device: ID3D11Device,
-    ctx: ID3D11DeviceContext,
-    rx: Receiver<ID3D11Texture2D>,
-    state: SharedState,
-    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) {
-    if let Err(e) = try_render_loop(hwnd, &device, &ctx, &rx, &state, &running) {
-        eprintln!("[renderer] fatal: {e}");
-    }
-}
-
-fn try_render_loop(
-    hwnd: HWND,
-    device: &ID3D11Device,
-    ctx: &ID3D11DeviceContext,
-    rx: &Receiver<ID3D11Texture2D>,
-    state: &SharedState,
-    running: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<()> {
-    let (swap_chain, rtv) = create_swap_chain(hwnd, device)?;
-    let (vs, ps, layout) = compile_shaders(device)?;
-    let sampler = create_sampler(device)?;
-    let cb = create_constant_buffer(device)?;
-
-    let mut latest_texture: Option<ID3D11Texture2D> = None;
-    let mut latest_srv: Option<ID3D11ShaderResourceView> = None;
-
-    let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) } as f32;
-    let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) } as f32;
-
-    let mut last_frame = std::time::Instant::now();
-
-    while running.load(std::sync::atomic::Ordering::Relaxed) {
-        let delta = last_frame.elapsed().as_secs_f32();
-        last_frame = std::time::Instant::now();
-
-        // Drain the channel; keep only the freshest frame.
-        while let Ok(tex) = rx.try_recv() {
-            latest_texture = Some(tex);
-            latest_srv = None; // invalidate cached SRV
-        }
-
-        let (zoom, enabled, smooth_speed) = {
-            let s = state.read();
-            (s.zoom, s.enabled, s.smooth_speed)
+        let wc = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(wnd_proc),
+            hInstance: hinstance,
+            lpszClassName: class_name,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            ..Default::default()
         };
+        RegisterClassExW(&wc);
 
-        let (mx, my) = cursor_normalised(screen_w, screen_h);
+        let hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
+            class_name,
+            w!("clear-view"),
+            WS_POPUP | WS_VISIBLE,
+            0,
+            0,
+            screen_w,
+            screen_h,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+        .expect("CreateWindowExW failed");
 
-        // Frame-rate-independent lerp toward cursor
-        let alpha = 1.0_f32 - (1.0 - smooth_speed).powf(delta * 60.0);
-        {
-            let mut s = state.write();
-            s.viewport_center[0] += (mx - s.viewport_center[0]) * alpha;
-            s.viewport_center[1] += (my - s.viewport_center[1]) * alpha;
+        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).ok();
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        SetTimer(Some(hwnd), 1, 16, None);
+
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
+    }
+}
 
-        let center = state.read().viewport_center;
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_DESTROY => unsafe {
+            PostQuitMessage(0);
+            LRESULT(0)
+        },
+        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        WM_TIMER => unsafe {
+            let hdc = GetDC(Some(hwnd));
+            draw(hdc);
+            ReleaseDC(Some(hwnd), hdc);
+            LRESULT(0)
+        },
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+fn draw(hdc: windows::Win32::Graphics::Gdi::HDC) {
+    unsafe {
+        let screen_w = GetSystemMetrics(SM_CXSCREEN);
+        let screen_h = GetSystemMetrics(SM_CYSCREEN);
+
+        let (zoom, enabled, smooth_speed) = WIN_DATA
+            .with(|d| {
+                let b = d.borrow();
+                let data = b.as_ref()?;
+                let s = data.app_state.read();
+                Some((s.zoom, s.enabled, s.smooth_speed))
+            })
+            .unwrap_or((2.0, false, 0.15));
 
         if !enabled {
-            unsafe {
-                ctx.ClearRenderTargetView(&rtv, &[0.0_f32, 0.0, 0.0, 1.0]);
-                swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            continue;
+            return;
         }
 
-        // Build SRV for the latest captured texture if needed.
-        if let Some(tex) = &latest_texture {
-            if latest_srv.is_none() {
-                latest_srv = Some(create_srv(device, tex)?);
-            }
-        }
+        let mut cursor = windows::Win32::Foundation::POINT::default();
+        let _ = GetCursorPos(&mut cursor);
 
-        update_constant_buffer(
-            ctx,
-            &cb,
-            &Constants {
-                center,
-                zoom,
-                _pad: 0.0,
-            },
-        );
+        // Smooth follow — frame-rate-independent lerp toward actual cursor
+        let smoothed = WIN_DATA.with(|d| {
+            let mut b = d.borrow_mut();
+            let data = b.as_mut()?;
+            let now = Instant::now();
+            let dt = now.duration_since(data.last_tick).as_secs_f32();
+            data.last_tick = now;
+            let alpha = 1.0_f32 - (1.0 - smooth_speed).powf(dt * 60.0);
+            data.smooth_x += (cursor.x as f32 - data.smooth_x) * alpha;
+            data.smooth_y += (cursor.y as f32 - data.smooth_y) * alpha;
+            Some((data.smooth_x, data.smooth_y))
+        });
 
-        unsafe {
-            ctx.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+        let (cx, cy) = match smoothed {
+            Some(p) => p,
+            None => return,
+        };
 
-            let vp = D3D11_VIEWPORT {
-                Width: screen_w,
-                Height: screen_h,
-                MaxDepth: 1.0,
-                ..Default::default()
+        let maybe_frame: Option<Arc<Frame>> = WIN_DATA.with(|d| {
+            let b = d.borrow();
+            let data = b.as_ref()?;
+            let lock = data.frame_state.lock().ok()?;
+            lock.clone()
+        });
+
+        let Some(frame) = maybe_frame else {
+            // No frame yet — fill black
+            let brush = CreateSolidBrush(COLORREF(0x00000000));
+            let rect = windows::Win32::Foundation::RECT {
+                left: 0,
+                top: 0,
+                right: screen_w,
+                bottom: screen_h,
             };
-            ctx.RSSetViewports(Some(&[vp]));
+            let _ = FillRect(hdc, &rect, brush);
+            let _ = DeleteObject(brush.into());
+            return;
+        };
 
-            ctx.VSSetShader(&vs, None);
-            ctx.PSSetShader(&ps, None);
-            ctx.IASetInputLayout(&layout);
-            ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            ctx.IASetVertexBuffers(0, 1, None, None, None);
+        let fw = frame.width as i32;
+        let fh = frame.height as i32;
 
-            ctx.PSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
-            ctx.PSSetSamplers(0, Some(&[Some(sampler.clone())]));
+        // Crop region: (screen / zoom) pixels centred on smoothed cursor
+        let src_w = (screen_w as f32 / zoom) as i32;
+        let src_h = (screen_h as f32 / zoom) as i32;
+        let src_x = (cx as i32 - src_w / 2).clamp(0, (fw - src_w).max(0));
+        let src_y = (cy as i32 - src_h / 2).clamp(0, (fh - src_h).max(0));
 
-            if let Some(srv) = &latest_srv {
-                ctx.PSSetShaderResources(0, Some(&[Some(srv.clone())]));
-            }
-
-            ctx.Draw(4, 0);
-            swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
-        }
-    }
-
-    Ok(())
-}
-
-fn create_swap_chain(
-    hwnd: HWND,
-    device: &ID3D11Device,
-) -> Result<(IDXGISwapChain1, ID3D11RenderTargetView)> {
-    unsafe {
-        let dxgi_device: IDXGIDevice = device.cast()?;
-        let adapter = dxgi_device.GetAdapter()?;
-        let factory: IDXGIFactory2 = adapter.GetParent()?;
-
-        let desc = DXGI_SWAP_CHAIN_DESC1 {
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 2,
-            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: fw,
+                biHeight: -fh, // top-down
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
             },
             ..Default::default()
         };
 
-        let swap_chain = factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None)?;
+        let mem_dc = CreateCompatibleDC(Some(hdc));
+        let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
 
-        let back_buffer: ID3D11Texture2D = swap_chain.GetBuffer(0)?;
-        let mut rtv = None;
-        device.CreateRenderTargetView(&back_buffer, None, Some(&mut rtv))?;
+        let Ok(hbmp) = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+        else {
+            let _ = DeleteDC(mem_dc);
+            return;
+        };
 
-        Ok((swap_chain, rtv.unwrap()))
-    }
-}
-
-fn compile_shaders(
-    device: &ID3D11Device,
-) -> Result<(ID3D11VertexShader, ID3D11PixelShader, ID3D11InputLayout)> {
-    let src = include_str!("../shaders/magnify.hlsl");
-    let src_bytes = src.as_bytes();
-
-    unsafe {
-        let mut vs_blob: Option<ID3DBlob> = None;
-        let mut errors: Option<ID3DBlob> = None;
-        D3DCompile(
-            src_bytes.as_ptr() as *const _,
-            src_bytes.len(),
-            None,
-            None,
-            None,
-            s!("vs_main"),
-            s!("vs_5_0"),
-            0,
-            0,
-            &mut vs_blob,
-            Some(&mut errors),
-        )
-        .inspect_err(|_| log_shader_errors(&errors))?;
-        let vs_blob: ID3DBlob = vs_blob.unwrap();
-
-        let mut ps_blob: Option<ID3DBlob> = None;
-        D3DCompile(
-            src_bytes.as_ptr() as *const _,
-            src_bytes.len(),
-            None,
-            None,
-            None,
-            s!("ps_main"),
-            s!("ps_5_0"),
-            0,
-            0,
-            &mut ps_blob,
-            Some(&mut errors),
-        )
-        .inspect_err(|_| log_shader_errors(&errors))?;
-        let ps_blob: ID3DBlob = ps_blob.unwrap();
-
-        let vs_bytes = std::slice::from_raw_parts(
-            vs_blob.GetBufferPointer() as *const u8,
-            vs_blob.GetBufferSize(),
-        );
-        let ps_bytes = std::slice::from_raw_parts(
-            ps_blob.GetBufferPointer() as *const u8,
-            ps_blob.GetBufferSize(),
-        );
-
-        let mut vs = None;
-        device.CreateVertexShader(vs_bytes, None, Some(&mut vs))?;
-
-        let mut ps = None;
-        device.CreatePixelShader(ps_bytes, None, Some(&mut ps))?;
-
-        // No vertex buffer — positions are generated in vs_main via SV_VertexID.
-        let mut layout = None;
-        device.CreateInputLayout(&[], vs_bytes, Some(&mut layout))?;
-
-        Ok((vs.unwrap(), ps.unwrap(), layout.unwrap()))
-    }
-}
-
-fn log_shader_errors(blob: &Option<ID3DBlob>) {
-    if let Some(b) = blob {
-        unsafe {
-            let ptr = b.GetBufferPointer() as *const u8;
-            let len = b.GetBufferSize();
-            if let Ok(s) = std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) {
-                eprintln!("[shader] {s}");
-            }
-        }
-    }
-}
-
-fn create_sampler(device: &ID3D11Device) -> Result<ID3D11SamplerState> {
-    let desc = D3D11_SAMPLER_DESC {
-        Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
-        AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
-        AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
-        MaxAnisotropy: 1,
-        ComparisonFunc: D3D11_COMPARISON_NEVER,
-        MaxLOD: f32::MAX,
-        ..Default::default()
-    };
-    let mut sampler = None;
-    unsafe { device.CreateSamplerState(&desc, Some(&mut sampler))? };
-    Ok(sampler.unwrap())
-}
-
-fn create_constant_buffer(device: &ID3D11Device) -> Result<ID3D11Buffer> {
-    let desc = D3D11_BUFFER_DESC {
-        ByteWidth: std::mem::size_of::<Constants>() as u32,
-        Usage: D3D11_USAGE_DYNAMIC,
-        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-        CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-        ..Default::default()
-    };
-    let mut buf = None;
-    unsafe { device.CreateBuffer(&desc, None, Some(&mut buf))? };
-    Ok(buf.unwrap())
-}
-
-fn update_constant_buffer(ctx: &ID3D11DeviceContext, buf: &ID3D11Buffer, data: &Constants) {
-    unsafe {
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        if ctx
-            .Map(buf, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
-            .is_ok()
-        {
+        if !bits.is_null() {
             std::ptr::copy_nonoverlapping(
-                data as *const Constants,
-                mapped.pData as *mut Constants,
-                1,
+                frame.data.as_ptr(),
+                bits as *mut u8,
+                frame.data.len(),
             );
-            ctx.Unmap(buf, 0);
         }
-    }
-}
 
-fn create_srv(
-    device: &ID3D11Device,
-    texture: &ID3D11Texture2D,
-) -> Result<ID3D11ShaderResourceView> {
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe { texture.GetDesc(&mut desc) };
+        let old = SelectObject(mem_dc, hbmp.into());
 
-    let srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
-        Format: desc.Format,
-        ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
-            Texture2D: D3D11_TEX2D_SRV {
-                MostDetailedMip: 0,
-                MipLevels: 1,
-            },
-        },
-    };
+        let _ = StretchBlt(
+            hdc,
+            0, 0, screen_w, screen_h,
+            Some(mem_dc),
+            src_x, src_y, src_w, src_h,
+            SRCCOPY,
+        );
 
-    let mut srv = None;
-    unsafe { device.CreateShaderResourceView(texture, Some(&srv_desc), Some(&mut srv))? };
-    Ok(srv.unwrap())
-}
+        // Draw magnified cursor overlay
+        let mut ci = CURSORINFO { cbSize: size_of::<CURSORINFO>() as u32, ..Default::default() };
+        if GetCursorInfo(&mut ci).is_ok() && ci.flags == CURSOR_SHOWING {
+            let zoom_i = zoom as i32;
+            let icon_w = GetSystemMetrics(SM_CXCURSOR) * zoom_i;
+            let icon_h = GetSystemMetrics(SM_CYCURSOR) * zoom_i;
+            let draw_x = (cursor.x - src_x) * zoom_i;
+            let draw_y = (cursor.y - src_y) * zoom_i;
+            DrawIconEx(hdc, draw_x, draw_y, HICON(ci.hCursor.0), icon_w, icon_h, 0, None, DI_NORMAL).ok();
+        }
 
-fn cursor_normalised(screen_w: f32, screen_h: f32) -> (f32, f32) {
-    unsafe {
-        let mut pt = windows::Win32::Foundation::POINT::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
-        (
-            (pt.x as f32 / screen_w).clamp(0.0, 1.0),
-            (pt.y as f32 / screen_h).clamp(0.0, 1.0),
-        )
+        SelectObject(mem_dc, old);
+        let _ = DeleteObject(hbmp.into());
+        let _ = DeleteDC(mem_dc);
     }
 }
