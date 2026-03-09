@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cv-core = { path = "../cv-core" }
-windows = { workspace = true }
+cv-core           = { path = "../cv-core" }
+windows           = { workspace = true }
+wgpu              = { workspace = true }
+raw-window-handle = { workspace = true }
+pollster          = { workspace = true }

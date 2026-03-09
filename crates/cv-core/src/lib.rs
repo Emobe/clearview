@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    /// Raw BGRA8 pixel data, row-major.
+    /// Raw BGRA8 pixel data, row-major, top-down.
     pub data: Vec<u8>,
 }
 
@@ -23,6 +23,26 @@ impl std::fmt::Display for Interpolation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DisplayMode {
+    Fullscreen,
+    Docked(Edge),
+}
+
+impl Default for DisplayMode {
+    fn default() -> Self {
+        Self::Fullscreen
+    }
+}
+
 pub struct AppState {
     pub enabled: bool,
     /// Magnification factor (1.0–10.0).
@@ -30,6 +50,9 @@ pub struct AppState {
     /// Lerp speed per logical 60 Hz tick (0.01–1.0).
     pub smooth_speed: f32,
     pub interpolation: Interpolation,
+    pub display_mode: DisplayMode,
+    /// Panel thickness in pixels (50–800). Ignored in Fullscreen mode.
+    pub panel_size: u32,
 }
 
 impl Default for AppState {
@@ -39,6 +62,8 @@ impl Default for AppState {
             zoom: 2.0,
             smooth_speed: 0.15,
             interpolation: Interpolation::Bilinear,
+            display_mode: DisplayMode::Fullscreen,
+            panel_size: 300,
         }
     }
 }
