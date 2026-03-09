@@ -5,10 +5,10 @@ struct Uniforms {
     src_y:  f32,
     src_w:  f32,
     src_h:  f32,
-    filter: u32,
-    _pad1:  u32,
-    _pad2:  u32,
-    _pad3:  u32,
+    color_mode: u32,
+    _pad1:      u32,
+    _pad2:      u32,
+    _pad3:      u32,
 }
 
 @group(0) @binding(0) var<uniform> u:          Uniforms;
@@ -46,14 +46,14 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let uv  = in.uv * vec2(u.src_w, u.src_h) + vec2(u.src_x, u.src_y);
     let col = textureSample(frame_tex, frame_samp, uv);
 
-    if u.filter == 1u {
+    if u.color_mode == 1u {
         // Inverted
         return vec4(1.0 - col.r, 1.0 - col.g, 1.0 - col.b, col.a);
-    } else if u.filter == 2u {
+    } else if u.color_mode == 2u {
         // Greyscale (standard luminance weights)
         let lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
         return vec4(lum, lum, lum, col.a);
-    } else if u.filter == 3u {
+    } else if u.color_mode == 3u {
         // Greyscale + Inverted
         let lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
         return vec4(1.0 - lum, 1.0 - lum, 1.0 - lum, col.a);
