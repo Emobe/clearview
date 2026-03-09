@@ -7,7 +7,11 @@
       "Bash(cargo build:*)",
       "Bash(xargs grep -l \"RegisterHotKey\")",
       "Read(//c/Users/Anthony/cv3/**)",
-      "Read(//c/Users/Anthony/cv3//**)"
+      "Read(//c/Users/Anthony/cv3//**)",
+      "WebFetch(domain:microsoft.github.io)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.rs)"
     ]
   }
 }
