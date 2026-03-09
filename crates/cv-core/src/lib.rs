@@ -28,17 +28,18 @@ impl ColorFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Interpolation {
+    #[default]
     Bilinear,
-    Lanczos, // placeholder – not yet implemented
+    Bicubic,
 }
 
-impl std::fmt::Display for Interpolation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Interpolation {
+    pub fn as_u32(self) -> u32 {
         match self {
-            Interpolation::Bilinear => write!(f, "Bilinear"),
-            Interpolation::Lanczos => write!(f, "Lanczos"),
+            Self::Bilinear => 0,
+            Self::Bicubic  => 1,
         }
     }
 }
@@ -82,7 +83,7 @@ impl Default for AppState {
             enabled: false,
             zoom: 2.0,
             smooth_speed: 0.15,
-            interpolation: Interpolation::Bilinear,
+            interpolation: Interpolation::default(),
             display_mode: DisplayMode::Fullscreen,
             panel_size: 300,
             color_filter: ColorFilter::None,

@@ -85,13 +85,7 @@ impl eframe::App for ClearViewApp {
             ui.label("Interpolation");
             ui.horizontal(|ui| {
                 ui.radio_value(&mut s.interpolation, Interpolation::Bilinear, "Bilinear");
-                ui.add_enabled(
-                    false,
-                    egui::RadioButton::new(
-                        s.interpolation == Interpolation::Lanczos,
-                        "Lanczos (coming soon)",
-                    ),
-                );
+                ui.radio_value(&mut s.interpolation, Interpolation::Bicubic,  "Bicubic");
             });
         });
 
