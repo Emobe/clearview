@@ -8,6 +8,26 @@ pub struct Frame {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ColorFilter {
+    #[default]
+    None,
+    Inverted,
+    Greyscale,
+    GreyscaleInverted,
+}
+
+impl ColorFilter {
+    pub fn as_u32(self) -> u32 {
+        match self {
+            Self::None              => 0,
+            Self::Inverted          => 1,
+            Self::Greyscale         => 2,
+            Self::GreyscaleInverted => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Interpolation {
     Bilinear,
@@ -53,6 +73,7 @@ pub struct AppState {
     pub display_mode: DisplayMode,
     /// Panel thickness in pixels (50–800). Ignored in Fullscreen mode.
     pub panel_size: u32,
+    pub color_filter: ColorFilter,
 }
 
 impl Default for AppState {
@@ -64,6 +85,7 @@ impl Default for AppState {
             interpolation: Interpolation::Bilinear,
             display_mode: DisplayMode::Fullscreen,
             panel_size: 300,
+            color_filter: ColorFilter::None,
         }
     }
 }

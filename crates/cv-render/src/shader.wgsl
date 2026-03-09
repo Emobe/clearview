@@ -1,12 +1,17 @@
-// Crop parameters — all values normalised to [0, 1] in texture space.
-struct Crop {
-    src_x: f32,
-    src_y: f32,
-    src_w: f32,
-    src_h: f32,
+// Uniforms — 32 bytes (crop 16 bytes + filter 4 bytes + 12 bytes padding).
+// filter: 0=None, 1=Inverted, 2=Greyscale, 3=GreyscaleInverted
+struct Uniforms {
+    src_x:  f32,
+    src_y:  f32,
+    src_w:  f32,
+    src_h:  f32,
+    color_mode: u32,
+    _pad1:      u32,
+    _pad2:      u32,
+    _pad3:      u32,
 }
 
-@group(0) @binding(0) var<uniform> crop:       Crop;
+@group(0) @binding(0) var<uniform> u:          Uniforms;
 @group(0) @binding(1) var          frame_tex:  texture_2d<f32>;
 @group(0) @binding(2) var          frame_samp: sampler;
 
@@ -38,6 +43,21 @@ fn vs(@builtin(vertex_index) vi: u32) -> VOut {
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     // Remap panel UV into the crop sub-region of the frame texture.
-    let uv = in.uv * vec2(crop.src_w, crop.src_h) + vec2(crop.src_x, crop.src_y);
-    return textureSample(frame_tex, frame_samp, uv);
+    let uv  = in.uv * vec2(u.src_w, u.src_h) + vec2(u.src_x, u.src_y);
+    let col = textureSample(frame_tex, frame_samp, uv);
+
+    if u.color_mode == 1u {
+        // Inverted
+        return vec4(1.0 - col.r, 1.0 - col.g, 1.0 - col.b, col.a);
+    } else if u.color_mode == 2u {
+        // Greyscale (standard luminance weights)
+        let lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+        return vec4(lum, lum, lum, col.a);
+    } else if u.color_mode == 3u {
+        // Greyscale + Inverted
+        let lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+        return vec4(1.0 - lum, 1.0 - lum, 1.0 - lum, col.a);
+    }
+
+    return col;
 }

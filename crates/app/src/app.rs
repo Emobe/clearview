@@ -1,4 +1,4 @@
-use cv_core::{DisplayMode, Edge, Interpolation, SharedState};
+use cv_core::{ColorFilter, DisplayMode, Edge, Interpolation, SharedState};
 use eframe::egui;
 
 pub struct ClearViewApp {
@@ -67,6 +67,17 @@ impl eframe::App for ClearViewApp {
                         .text("Panel size (px)"),
                 );
             }
+
+            ui.add_space(8.0);
+
+            // Colour filter
+            ui.label("Colour filter");
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(&mut s.color_filter, ColorFilter::None,              "None");
+                ui.radio_value(&mut s.color_filter, ColorFilter::Inverted,          "Inverted");
+                ui.radio_value(&mut s.color_filter, ColorFilter::Greyscale,         "Greyscale");
+                ui.radio_value(&mut s.color_filter, ColorFilter::GreyscaleInverted, "Grey+Inv");
+            });
 
             ui.add_space(8.0);
 

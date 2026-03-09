@@ -96,14 +96,14 @@ impl WgpuState {
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label:   Some("magnify-bgl"),
             entries: &[
-                // binding 0 — Crop uniform (16 bytes)
+                // binding 0 — Uniforms (32 bytes: crop + filter + padding)
                 wgpu::BindGroupLayoutEntry {
                     binding:    0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty:                 wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size:   wgpu::BufferSize::new(16),
+                        min_binding_size:   wgpu::BufferSize::new(32),
                     },
                     count: None,
                 },
@@ -172,8 +172,8 @@ impl WgpuState {
         });
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label:              Some("crop-uniform"),
-            size:               16,
+            label:              Some("uniforms"),
+            size:               32,
             usage:              wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -251,12 +251,16 @@ impl WgpuState {
         );
     }
 
-    /// Write the normalised crop rect [src_x, src_y, src_w, src_h] to the uniform buffer.
-    pub fn write_crop(&self, crop: [f32; 4]) {
-        let mut bytes = [0u8; 16];
+    /// Write crop rect and colour filter to the uniform buffer (32 bytes).
+    /// crop: [src_x, src_y, src_w, src_h] normalised to [0, 1].
+    /// filter: ColorFilter::as_u32() — 0=None, 1=Inverted, 2=Greyscale, 3=GreyscaleInverted.
+    pub fn write_uniforms(&self, crop: [f32; 4], filter: u32) {
+        let mut bytes = [0u8; 32];
         for (i, &f) in crop.iter().enumerate() {
             bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
         }
+        bytes[16..20].copy_from_slice(&filter.to_ne_bytes());
+        // bytes[20..32] remain zero (padding)
         self.queue.write_buffer(&self.uniform_buf, 0, &bytes);
     }
 
