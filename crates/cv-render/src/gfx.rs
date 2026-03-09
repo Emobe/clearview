@@ -251,16 +251,18 @@ impl WgpuState {
         );
     }
 
-    /// Write crop rect and colour filter to the uniform buffer (32 bytes).
-    /// crop: [src_x, src_y, src_w, src_h] normalised to [0, 1].
-    /// filter: ColorFilter::as_u32() — 0=None, 1=Inverted, 2=Greyscale, 3=GreyscaleInverted.
-    pub fn write_uniforms(&self, crop: [f32; 4], filter: u32) {
+    /// Write all uniforms to the 32-byte buffer.
+    /// crop:        [src_x, src_y, src_w, src_h] normalised to [0, 1].
+    /// color_mode:  ColorFilter::as_u32()   — 0=None,1=Inverted,2=Greyscale,3=GreyscaleInverted.
+    /// interp_mode: Interpolation::as_u32() — 0=Bilinear, 1=Bicubic.
+    pub fn write_uniforms(&self, crop: [f32; 4], color_mode: u32, interp_mode: u32) {
         let mut bytes = [0u8; 32];
         for (i, &f) in crop.iter().enumerate() {
             bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
         }
-        bytes[16..20].copy_from_slice(&filter.to_ne_bytes());
-        // bytes[20..32] remain zero (padding)
+        bytes[16..20].copy_from_slice(&color_mode.to_ne_bytes());
+        bytes[20..24].copy_from_slice(&interp_mode.to_ne_bytes());
+        // bytes[24..32] remain zero (padding)
         self.queue.write_buffer(&self.uniform_buf, 0, &bytes);
     }
 

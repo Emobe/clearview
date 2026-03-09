@@ -21,7 +21,7 @@ use windows::{
     },
 };
 
-use cv_core::{ColorFilter, DisplayMode, Edge, Frame, FrameState, SharedState};
+use cv_core::{ColorFilter, DisplayMode, Edge, Frame, FrameState, Interpolation, SharedState};
 use gfx::WgpuState;
 
 struct WindowData {
@@ -185,8 +185,9 @@ fn on_timer(hwnd: HWND) {
         panel_size:   u32,
         zoom:         f32,
         smooth_speed: f32,
-        color_filter: ColorFilter,
-        frame:        Option<Arc<Frame>>,
+        color_filter:  ColorFilter,
+        interpolation: Interpolation,
+        frame:         Option<Arc<Frame>>,
         cur_enabled:    bool,
         cur_mode:       DisplayMode,
         cur_panel_size: u32,
@@ -207,7 +208,8 @@ fn on_timer(hwnd: HWND) {
             panel_size:   s.panel_size,
             zoom:         s.zoom,
             smooth_speed: s.smooth_speed,
-            color_filter: s.color_filter,
+            color_filter:  s.color_filter,
+            interpolation: s.interpolation,
             frame,
             cur_enabled:    w.cur_enabled,
             cur_mode:       w.cur_mode,
@@ -341,7 +343,7 @@ fn on_timer(hwnd: HWND) {
         if let Some(frame) = &snap.frame {
             w.wgpu.upload_frame(&frame.data, frame.width, frame.height);
         }
-        w.wgpu.write_uniforms(crop, snap.color_filter.as_u32());
+        w.wgpu.write_uniforms(crop, snap.color_filter.as_u32(), snap.interpolation.as_u32());
 
         if !w.wgpu.render() {
             // Surface lost/outdated — reconfigure to recover.
