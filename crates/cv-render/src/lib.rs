@@ -39,6 +39,11 @@ struct WindowData {
     cur_mode:       DisplayMode,
     cur_panel_size: u32,
     appbar_active:  bool,
+    // GPU write caching — skip redundant uploads/uniform writes.
+    last_frame:       Option<Arc<Frame>>,
+    last_crop:        [f32; 4],
+    last_color_mode:  u32,
+    last_interp_mode: u32,
 }
 
 thread_local! {
@@ -100,6 +105,10 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
             cur_mode:       DisplayMode::Fullscreen,
             cur_panel_size: 300,
             appbar_active:  false,
+            last_frame:       None,
+            last_crop:        [f32::NAN; 4], // NAN != NAN → forces first write
+            last_color_mode:  u32::MAX,      // forces first write
+            last_interp_mode: u32::MAX,      // forces first write
         });
     });
 
@@ -340,10 +349,24 @@ fn on_timer(hwnd: HWND) {
         let src_y = (cy - src_h * 0.5).clamp(0.0, fh - src_h);
         let crop  = [src_x / fw, src_y / fh, src_w / fw, src_h / fh];
 
+        // Upload frame only when the capture thread has produced a new Arc<Frame>.
         if let Some(frame) = &snap.frame {
-            w.wgpu.upload_frame(&frame.data, frame.width, frame.height);
+            let new_frame = w.last_frame.as_ref().map_or(true, |last| !Arc::ptr_eq(last, frame));
+            if new_frame {
+                w.wgpu.upload_frame(&frame.data, frame.width, frame.height);
+                w.last_frame = Some(Arc::clone(frame));
+            }
         }
-        w.wgpu.write_uniforms(crop, snap.color_filter.as_u32(), snap.interpolation.as_u32());
+
+        // Write uniforms only when crop or settings have changed.
+        let color_mode  = snap.color_filter.as_u32();
+        let interp_mode = snap.interpolation.as_u32();
+        if crop != w.last_crop || color_mode != w.last_color_mode || interp_mode != w.last_interp_mode {
+            w.wgpu.write_uniforms(crop, color_mode, interp_mode);
+            w.last_crop        = crop;
+            w.last_color_mode  = color_mode;
+            w.last_interp_mode = interp_mode;
+        }
 
         if !w.wgpu.render() {
             // Surface lost/outdated — reconfigure to recover.
