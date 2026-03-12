@@ -12,7 +12,7 @@ use windows::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
             GetSystemMetrics, LoadCursorW, LWA_ALPHA, PostQuitMessage, RegisterClassExW,
             RegisterWindowMessageW, SetLayeredWindowAttributes, SetTimer,
-            SetWindowDisplayAffinity, SetWindowPos, ShowWindow, TranslateMessage,
+            SetWindowDisplayAffinity, SetWindowPos, ShowCursor, ShowWindow, TranslateMessage,
             WDA_EXCLUDEFROMCAPTURE, HTTRANSPARENT, IDC_ARROW, MSG, SM_CXSCREEN, SM_CYSCREEN,
             SW_HIDE, SW_SHOW, WM_DESTROY, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW,
             WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
@@ -44,6 +44,10 @@ struct WindowData {
     last_crop:        [f32; 4],
     last_color_mode:  u32,
     last_interp_mode: u32,
+    last_cursor_x:    u32,
+    last_cursor_y:    u32,
+    // Software cursor — hardware cursor state and window origin.
+    cursor_hidden:    bool,
 }
 
 thread_local! {
@@ -109,6 +113,9 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
             last_crop:        [f32::NAN; 4], // NAN != NAN → forces first write
             last_color_mode:  u32::MAX,      // forces first write
             last_interp_mode: u32::MAX,      // forces first write
+            last_cursor_x:    u32::MAX,      // forces first write
+            last_cursor_y:    u32::MAX,      // forces first write
+            cursor_hidden:    false,
         });
     });
 
@@ -254,6 +261,15 @@ fn on_timer(hwnd: HWND) {
                 new_appbar_active = false;
             }
             unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
+            // Restore hardware cursor.
+            WIN_DATA.with(|d| {
+                if let Some(w) = d.borrow_mut().as_mut() {
+                    if w.cursor_hidden {
+                        unsafe { ShowCursor(true); }
+                        w.cursor_hidden = false;
+                    }
+                }
+            });
 
         } else if enabled_changed && snap.enabled {
             // ── Enabling ──────────────────────────────────────────────────
@@ -274,6 +290,17 @@ fn on_timer(hwnd: HWND) {
                     new_rect = Some(rect);
                 }
             }
+            // Hide hardware cursor only in fullscreen mode.
+            if snap.mode == DisplayMode::Fullscreen {
+                WIN_DATA.with(|d| {
+                    if let Some(w) = d.borrow_mut().as_mut() {
+                        if !w.cursor_hidden {
+                            unsafe { ShowCursor(false); }
+                            w.cursor_hidden = true;
+                        }
+                    }
+                });
+            }
             unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
 
         } else if snap.enabled && mode_changed {
@@ -287,12 +314,30 @@ fn on_timer(hwnd: HWND) {
                     let rect = RECT { left: 0, top: 0, right: sw, bottom: sh };
                     move_window(hwnd, rect);
                     new_rect = Some(rect);
+                    // Switching to fullscreen — hide hardware cursor.
+                    WIN_DATA.with(|d| {
+                        if let Some(w) = d.borrow_mut().as_mut() {
+                            if !w.cursor_hidden {
+                                unsafe { ShowCursor(false); }
+                                w.cursor_hidden = true;
+                            }
+                        }
+                    });
                 }
                 DisplayMode::Docked(e) => {
                     let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
                     move_window(hwnd, rect);
                     new_appbar_active = true;
                     new_rect = Some(rect);
+                    // Switching to docked — restore hardware cursor.
+                    WIN_DATA.with(|d| {
+                        if let Some(w) = d.borrow_mut().as_mut() {
+                            if w.cursor_hidden {
+                                unsafe { ShowCursor(true); }
+                                w.cursor_hidden = false;
+                            }
+                        }
+                    });
                 }
             }
 
@@ -358,14 +403,25 @@ fn on_timer(hwnd: HWND) {
             }
         }
 
-        // Write uniforms only when crop or settings have changed.
+        // Cursor position in output window pixel space, accounting for zoom/crop.
+        let cursor_x = ((cx - src_x) / src_w * win_w as f32).clamp(0.0, win_w as f32 - 1.0) as u32;
+        let cursor_y = ((cy - src_y) / src_h * win_h as f32).clamp(0.0, win_h as f32 - 1.0) as u32;
+
+        // Write uniforms only when crop, settings, or cursor have changed.
         let color_mode  = snap.color_filter.as_u32();
         let interp_mode = snap.interpolation.as_u32();
-        if crop != w.last_crop || color_mode != w.last_color_mode || interp_mode != w.last_interp_mode {
-            w.wgpu.write_uniforms(crop, color_mode, interp_mode);
+        if crop != w.last_crop
+            || color_mode  != w.last_color_mode
+            || interp_mode != w.last_interp_mode
+            || cursor_x    != w.last_cursor_x
+            || cursor_y    != w.last_cursor_y
+        {
+            w.wgpu.write_uniforms(crop, color_mode, interp_mode, cursor_x, cursor_y);
             w.last_crop        = crop;
             w.last_color_mode  = color_mode;
             w.last_interp_mode = interp_mode;
+            w.last_cursor_x    = cursor_x;
+            w.last_cursor_y    = cursor_y;
         }
 
         if !w.wgpu.render() {

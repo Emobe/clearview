@@ -1,6 +1,7 @@
-// Uniforms — 32 bytes (crop 16 bytes + color_mode 4 bytes + interp_mode 4 bytes + 8 bytes padding).
+// Uniforms — 32 bytes (crop 16 bytes + color_mode 4 bytes + interp_mode 4 bytes + cursor 8 bytes).
 // color_mode:  0=None, 1=Inverted, 2=Greyscale, 3=GreyscaleInverted
 // interp_mode: 0=Bilinear, 1=Bicubic (Catmull-Rom)
+// cursor_x/y:  software cursor position in output window pixels
 struct Uniforms {
     src_x:       f32,
     src_y:       f32,
@@ -8,8 +9,8 @@ struct Uniforms {
     src_h:       f32,
     color_mode:  u32,
     interp_mode: u32,
-    _pad2:       u32,
-    _pad3:       u32,
+    cursor_x:    u32,
+    cursor_y:    u32,
 }
 
 @group(0) @binding(0) var<uniform> u:          Uniforms;
@@ -89,18 +90,31 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col = textureSample(frame_tex, frame_samp, uv);
     }
 
+    // Apply colour filter.
+    var out_col: vec4<f32>;
     if u.color_mode == 1u {
         // Inverted
-        return vec4(1.0 - col.r, 1.0 - col.g, 1.0 - col.b, col.a);
+        out_col = vec4(1.0 - col.r, 1.0 - col.g, 1.0 - col.b, col.a);
     } else if u.color_mode == 2u {
         // Greyscale (standard luminance weights)
         let lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
-        return vec4(lum, lum, lum, col.a);
+        out_col = vec4(lum, lum, lum, col.a);
     } else if u.color_mode == 3u {
         // Greyscale + Inverted
         let lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
-        return vec4(1.0 - lum, 1.0 - lum, 1.0 - lum, col.a);
+        out_col = vec4(1.0 - lum, 1.0 - lum, 1.0 - lum, col.a);
+    } else {
+        out_col = col;
     }
 
-    return col;
+    // Software cursor: white filled circle (r=10px) with 2px black border.
+    let cur = vec2<f32>(f32(u.cursor_x), f32(u.cursor_y));
+    let dist = length(in.pos.xy - cur);
+    if dist < 10.0 {
+        return vec4(1.0, 1.0, 1.0, 1.0);
+    } else if dist < 12.0 {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+
+    return out_col;
 }
