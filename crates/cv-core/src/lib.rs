@@ -97,3 +97,16 @@ pub type FrameState = Arc<Mutex<Option<Arc<Frame>>>>;
 pub fn new_shared() -> SharedState {
     Arc::new(RwLock::new(AppState::default()))
 }
+
+/// Information about a single DXGI output (monitor).
+#[derive(Clone)]
+pub struct OutputInfo {
+    /// Zero-based DXGI output index on the primary adapter.
+    pub idx: u32,
+    /// Left edge in virtual screen coordinates.
+    pub left: i32,
+    /// Top edge in virtual screen coordinates.
+    pub top: i32,
+    pub width: u32,
+    pub height: u32,
+}
