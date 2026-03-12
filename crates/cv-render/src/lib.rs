@@ -12,60 +12,62 @@ use std::{
 };
 
 use windows::{
-    core::w,
     Win32::{
         Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
-            LoadCursorW, LWA_ALPHA, PostQuitMessage, RegisterClassExW,
-            RegisterWindowMessageW, SetLayeredWindowAttributes, SetTimer,
-            SetWindowDisplayAffinity, SetWindowPos, ShowCursor, ShowWindow, TranslateMessage,
-            WDA_EXCLUDEFROMCAPTURE, HTTRANSPARENT, IDC_ARROW, MSG,
-            SW_HIDE, SW_SHOW, WM_DESTROY, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
-            SWP_NOACTIVATE, SWP_NOZORDER,
+        UI::{
+            Magnification::{MagInitialize, MagShowSystemCursor, MagUninitialize},
+            WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
+                HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, MSG, PostQuitMessage,
+                RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
+                SWP_NOZORDER, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity,
+                SetWindowPos, ShowWindow, TranslateMessage, WDA_EXCLUDEFROMCAPTURE, WM_DESTROY,
+                WM_NCHITTEST, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+            },
         },
     },
+    core::w,
 };
 
-use cv_core::{ColorFilter, DisplayMode, Edge, Frame, FrameState, Interpolation, OutputInfo, SharedState};
+use cv_core::{
+    ColorFilter, DisplayMode, Edge, Frame, FrameState, Interpolation, OutputInfo, SharedState,
+};
 use gfx::WgpuState;
 
 struct WindowData {
-    wgpu:           WgpuState,
-    frame_state:    FrameState,
-    app_state:      SharedState,
-    smooth_x:       f32,
-    smooth_y:       f32,
-    last_tick:      Instant,
+    wgpu: WgpuState,
+    frame_state: FrameState,
+    app_state: SharedState,
+    smooth_x: f32,
+    smooth_y: f32,
+    last_tick: Instant,
     /// All monitors enumerated at startup (virtual-screen coords).
-    outputs:        Vec<OutputInfo>,
+    outputs: Vec<OutputInfo>,
     /// Index into `outputs` for the currently-active monitor.
     active_output_idx: u32,
     /// Top-left of the active monitor in virtual screen coordinates.
-    monitor_left:   i32,
-    monitor_top:    i32,
+    monitor_left: i32,
+    monitor_top: i32,
     /// Width/height of the active monitor.
-    screen_w:       i32,
-    screen_h:       i32,
+    screen_w: i32,
+    screen_h: i32,
     /// Shared with the capture thread — signals which output to duplicate.
     desired_output: Arc<AtomicU32>,
-    callback_msg:   u32,
+    callback_msg: u32,
     // Change-detection: what is currently applied to the window.
-    cur_enabled:    bool,
-    cur_mode:       DisplayMode,
+    cur_enabled: bool,
+    cur_mode: DisplayMode,
     cur_panel_size: u32,
-    appbar_active:  bool,
+    appbar_active: bool,
     // GPU write caching — skip redundant uploads/uniform writes.
-    last_frame:       Option<Arc<Frame>>,
-    last_crop:        [f32; 4],
-    last_color_mode:  u32,
+    last_frame: Option<Arc<Frame>>,
+    last_crop: [f32; 4],
+    last_color_mode: u32,
     last_interp_mode: u32,
-    last_cursor_x:    u32,
-    last_cursor_y:    u32,
-    // Software cursor — hardware cursor state.
-    cursor_hidden:    bool,
+    last_cursor_x: u32,
+    last_cursor_y: u32,
 }
 
 thread_local! {
@@ -74,16 +76,20 @@ thread_local! {
 
 /// Creates the overlay window and blocks on its message loop.
 pub fn run_overlay(
-    frame_state:    FrameState,
-    app_state:      SharedState,
-    outputs:        Vec<OutputInfo>,
+    frame_state: FrameState,
+    app_state: SharedState,
+    outputs: Vec<OutputInfo>,
     desired_output: Arc<AtomicU32>,
 ) {
     // Use primary monitor (first in list) as the starting monitor.
     let primary = outputs.first().cloned().unwrap_or(OutputInfo {
-        idx: 0, left: 0, top: 0, width: 1920, height: 1080,
+        idx: 0,
+        left: 0,
+        top: 0,
+        width: 1920,
+        height: 1080,
     });
-    let screen_w = primary.width  as i32;
+    let screen_w = primary.width as i32;
     let screen_h = primary.height as i32;
 
     let hwnd = unsafe {
@@ -91,11 +97,11 @@ pub fn run_overlay(
         let class_name = w!("clear_view_overlay");
 
         let wc = WNDCLASSEXW {
-            cbSize:        size_of::<WNDCLASSEXW>() as u32,
-            lpfnWndProc:   Some(wnd_proc),
-            hInstance:     hinstance,
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(wnd_proc),
+            hInstance: hinstance,
             lpszClassName: class_name,
-            hCursor:       LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassExW(&wc);
@@ -105,8 +111,14 @@ pub fn run_overlay(
             class_name,
             w!("clear-view"),
             WS_POPUP, // starts hidden
-            primary.left, primary.top, screen_w, screen_h,
-            None, None, Some(hinstance), None,
+            primary.left,
+            primary.top,
+            screen_w,
+            screen_h,
+            None,
+            None,
+            Some(hinstance),
+            None,
         )
         .expect("CreateWindowExW failed");
 
@@ -118,37 +130,44 @@ pub fn run_overlay(
     let callback_msg = unsafe { RegisterWindowMessageW(w!("ClearViewAppBar")) };
 
     // wgpu init (blocking) — window starts primary-monitor-sized.
-    let wgpu = WgpuState::new(hwnd, screen_w as u32, screen_h as u32,
-                               primary.width, primary.height);
+    let wgpu = WgpuState::new(
+        hwnd,
+        screen_w as u32,
+        screen_h as u32,
+        primary.width,
+        primary.height,
+    );
 
     WIN_DATA.with(|d| {
         *d.borrow_mut() = Some(WindowData {
             wgpu,
             frame_state,
             app_state,
-            smooth_x:       screen_w as f32 / 2.0 + primary.left as f32,
-            smooth_y:       screen_h as f32 / 2.0 + primary.top  as f32,
-            last_tick:      Instant::now(),
+            smooth_x: screen_w as f32 / 2.0 + primary.left as f32,
+            smooth_y: screen_h as f32 / 2.0 + primary.top as f32,
+            last_tick: Instant::now(),
             active_output_idx: primary.idx,
-            monitor_left:   primary.left,
-            monitor_top:    primary.top,
-            screen_w, screen_h,
+            monitor_left: primary.left,
+            monitor_top: primary.top,
+            screen_w,
+            screen_h,
             outputs,
             desired_output,
             callback_msg,
-            cur_enabled:    false,
-            cur_mode:       DisplayMode::Fullscreen,
+            cur_enabled: false,
+            cur_mode: DisplayMode::Fullscreen,
             cur_panel_size: 300,
-            appbar_active:  false,
-            last_frame:       None,
-            last_crop:        [f32::NAN; 4], // NAN != NAN → forces first write
-            last_color_mode:  u32::MAX,      // forces first write
-            last_interp_mode: u32::MAX,      // forces first write
-            last_cursor_x:    u32::MAX,      // forces first write
-            last_cursor_y:    u32::MAX,      // forces first write
-            cursor_hidden:    false,
+            appbar_active: false,
+            last_frame: None,
+            last_crop: [f32::NAN; 4],   // NAN != NAN → forces first write
+            last_color_mode: u32::MAX,  // forces first write
+            last_interp_mode: u32::MAX, // forces first write
+            last_cursor_x: u32::MAX,    // forces first write
+            last_cursor_y: u32::MAX,    // forces first write
         });
     });
+
+    unsafe { MagInitialize() };
 
     unsafe { SetTimer(Some(hwnd), 1, 16, None) };
 
@@ -168,6 +187,8 @@ pub fn run_overlay(
             }
         }
     });
+    unsafe { MagShowSystemCursor(true) };
+    unsafe { MagUninitialize() };
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -194,24 +215,30 @@ unsafe extern "system" fn wnd_proc(
         WM_TIMER => {
             on_timer(hwnd);
             LRESULT(0)
-        },
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
 fn handle_appbar_callback(hwnd: HWND, wparam: WPARAM) {
-    if wparam.0 != appbar::ABN_POSCHANGED { return; }
+    if wparam.0 != appbar::ABN_POSCHANGED {
+        return;
+    }
 
     let params = WIN_DATA.with(|d| {
         let b = d.borrow();
         let w = b.as_ref()?;
-        if !w.appbar_active { return None; }
+        if !w.appbar_active {
+            return None;
+        }
         match w.cur_mode {
             DisplayMode::Docked(e) => Some((e, w.cur_panel_size as i32, w.screen_w, w.screen_h)),
             _ => None,
         }
     });
-    let Some((edge, thickness, sw, sh)) = params else { return };
+    let Some((edge, thickness, sw, sh)) = params else {
+        return;
+    };
 
     // Borrow is dropped — safe to call SetWindowPos.
     let rect = appbar::reposition(hwnd, edge, thickness, sw, sh);
@@ -227,23 +254,23 @@ fn handle_appbar_callback(hwnd: HWND, wparam: WPARAM) {
 fn on_timer(hwnd: HWND) {
     // ── Snapshot desired state ───────────────────────────────────────────────
     struct Snap {
-        enabled:      bool,
-        mode:         DisplayMode,
-        panel_size:   u32,
-        zoom:         f32,
+        enabled: bool,
+        mode: DisplayMode,
+        panel_size: u32,
+        zoom: f32,
         smooth_speed: f32,
-        color_filter:  ColorFilter,
+        color_filter: ColorFilter,
         interpolation: Interpolation,
-        frame:         Option<Arc<Frame>>,
-        cur_enabled:    bool,
-        cur_mode:       DisplayMode,
+        frame: Option<Arc<Frame>>,
+        cur_enabled: bool,
+        cur_mode: DisplayMode,
         cur_panel_size: u32,
-        appbar_active:  bool,
-        screen_w:       i32,
-        screen_h:       i32,
-        monitor_left:   i32,
-        monitor_top:    i32,
-        callback_msg:   u32,
+        appbar_active: bool,
+        screen_w: i32,
+        screen_h: i32,
+        monitor_left: i32,
+        monitor_top: i32,
+        callback_msg: u32,
     }
 
     let snap = WIN_DATA.with(|d| {
@@ -252,22 +279,22 @@ fn on_timer(hwnd: HWND) {
         let s = w.app_state.read();
         let frame = w.frame_state.lock().ok()?.clone();
         Some(Snap {
-            enabled:      s.enabled,
-            mode:         s.display_mode,
-            panel_size:   s.panel_size,
-            zoom:         s.zoom,
+            enabled: s.enabled,
+            mode: s.display_mode,
+            panel_size: s.panel_size,
+            zoom: s.zoom,
             smooth_speed: s.smooth_speed,
-            color_filter:  s.color_filter,
+            color_filter: s.color_filter,
             interpolation: s.interpolation,
             frame,
-            cur_enabled:    w.cur_enabled,
-            cur_mode:       w.cur_mode,
+            cur_enabled: w.cur_enabled,
+            cur_mode: w.cur_mode,
             cur_panel_size: w.cur_panel_size,
-            appbar_active:  w.appbar_active,
-            screen_w:     w.screen_w,
-            screen_h:     w.screen_h,
+            appbar_active: w.appbar_active,
+            screen_w: w.screen_w,
+            screen_h: w.screen_h,
             monitor_left: w.monitor_left,
-            monitor_top:  w.monitor_top,
+            monitor_top: w.monitor_top,
             callback_msg: w.callback_msg,
         })
     });
@@ -277,18 +304,15 @@ fn on_timer(hwnd: HWND) {
     let sh = snap.screen_h;
 
     // ── State transitions ────────────────────────────────────────────────────
-    let enabled_changed    = snap.enabled    != snap.cur_enabled;
-    let mode_changed       = snap.mode       != snap.cur_mode;
+    let enabled_changed = snap.enabled != snap.cur_enabled;
+    let mode_changed = snap.mode != snap.cur_mode;
     let panel_size_changed = snap.panel_size != snap.cur_panel_size;
 
-    let need_transition = enabled_changed
-        || (snap.enabled && mode_changed)
-        || (snap.enabled && panel_size_changed);
+    let need_transition =
+        enabled_changed || (snap.enabled && mode_changed) || (snap.enabled && panel_size_changed);
 
     let mut new_appbar_active = snap.appbar_active;
     let mut new_rect: Option<RECT> = None;
-    // cursor hide/show: +1 = hide, -1 = show, 0 = no change
-    let mut cursor_delta: i32 = 0;
 
     if need_transition {
         if enabled_changed && !snap.enabled {
@@ -298,12 +322,6 @@ fn on_timer(hwnd: HWND) {
                 new_appbar_active = false;
             }
             unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
-            // Decide whether to restore hardware cursor (need current state).
-            let hidden = WIN_DATA.with(|d| {
-                d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
-            });
-            if hidden { cursor_delta = -1; }
-
         } else if enabled_changed && snap.enabled {
             // ── Enabling ──────────────────────────────────────────────────
             if snap.appbar_active {
@@ -312,10 +330,12 @@ fn on_timer(hwnd: HWND) {
             }
             match snap.mode {
                 DisplayMode::Fullscreen => {
-                    let ml = snap.monitor_left;
-                    let mt = snap.monitor_top;
-                    let rect = RECT { left: ml, top: mt, right: ml + sw, bottom: mt + sh };
-                    new_rect = Some(rect);
+                    new_rect = Some(RECT {
+                        left: snap.monitor_left,
+                        top: snap.monitor_top,
+                        right: snap.monitor_left + sw,
+                        bottom: snap.monitor_top + sh,
+                    });
                 }
                 DisplayMode::Docked(e) => {
                     let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
@@ -323,13 +343,6 @@ fn on_timer(hwnd: HWND) {
                     new_appbar_active = true;
                 }
             }
-            if snap.mode == DisplayMode::Fullscreen {
-                let hidden = WIN_DATA.with(|d| {
-                    d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
-                });
-                if !hidden { cursor_delta = 1; }
-            }
-
         } else if snap.enabled && mode_changed {
             // ── Mode change while enabled ─────────────────────────────────
             if snap.appbar_active {
@@ -338,26 +351,19 @@ fn on_timer(hwnd: HWND) {
             }
             match snap.mode {
                 DisplayMode::Fullscreen => {
-                    let ml = snap.monitor_left;
-                    let mt = snap.monitor_top;
-                    let rect = RECT { left: ml, top: mt, right: ml + sw, bottom: mt + sh };
-                    new_rect = Some(rect);
-                    let hidden = WIN_DATA.with(|d| {
-                        d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
+                    new_rect = Some(RECT {
+                        left: snap.monitor_left,
+                        top: snap.monitor_top,
+                        right: snap.monitor_left + sw,
+                        bottom: snap.monitor_top + sh,
                     });
-                    if !hidden { cursor_delta = 1; }
                 }
                 DisplayMode::Docked(e) => {
                     let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
                     new_rect = Some(rect);
                     new_appbar_active = true;
-                    let hidden = WIN_DATA.with(|d| {
-                        d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
-                    });
-                    if hidden { cursor_delta = -1; }
                 }
             }
-
         } else if snap.enabled && panel_size_changed {
             // ── Panel size change while docked ────────────────────────────
             if let DisplayMode::Docked(e) = snap.mode {
@@ -376,10 +382,9 @@ fn on_timer(hwnd: HWND) {
             unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
         }
 
-        // ── ShowCursor after all window calls are done ────────────────────
-        if cursor_delta != 0 {
-            unsafe { ShowCursor(cursor_delta > 0); } // false = hide, true = show
-        }
+        // ── Cursor visibility via Magnification API ───────────────────────
+        let show_cursor = !(snap.enabled && snap.mode == DisplayMode::Fullscreen);
+        unsafe { MagShowSystemCursor(show_cursor) };
 
         // ── Write back tracking state + resize wgpu surface ──────────────
         WIN_DATA.with(|d| {
@@ -389,8 +394,6 @@ fn on_timer(hwnd: HWND) {
             w.cur_mode       = snap.mode;
             w.cur_panel_size = snap.panel_size;
             w.appbar_active  = new_appbar_active;
-            if cursor_delta == 1  { w.cursor_hidden = true;  }
-            if cursor_delta == -1 { w.cursor_hidden = false; }
             if let Some(rect) = new_rect {
                 let (rw, rh) = rect_dims(rect);
                 w.wgpu.resize(rw, rh);
@@ -399,10 +402,14 @@ fn on_timer(hwnd: HWND) {
     }
 
     // ── Render ───────────────────────────────────────────────────────────────
-    if !snap.enabled { return; }
+    if !snap.enabled {
+        return;
+    }
 
     let mut cursor = windows::Win32::Foundation::POINT::default();
-    unsafe { let _ = GetCursorPos(&mut cursor); }
+    unsafe {
+        let _ = GetCursorPos(&mut cursor);
+    }
 
     // ── Monitor follow: collect switch rect before taking the main borrow ───
     // We compute the move rect here (outside WIN_DATA borrow) so that
@@ -413,12 +420,14 @@ fn on_timer(hwnd: HWND) {
 
         let target = w.outputs.iter().find(|o| {
             cursor.x >= o.left
-                && cursor.x < o.left + o.width  as i32
+                && cursor.x < o.left + o.width as i32
                 && cursor.y >= o.top
-                && cursor.y < o.top  + o.height as i32
+                && cursor.y < o.top + o.height as i32
         });
         let Some(target) = target else { return None };
-        if target.idx == w.active_output_idx { return None; }
+        if target.idx == w.active_output_idx {
+            return None;
+        }
 
         let new_idx = target.idx;
         let nl = target.left;
@@ -428,19 +437,19 @@ fn on_timer(hwnd: HWND) {
 
         w.desired_output.store(new_idx, Ordering::Relaxed);
         w.active_output_idx = new_idx;
-        w.monitor_left      = nl;
-        w.monitor_top       = nt;
-        w.screen_w          = nw as i32;
-        w.screen_h          = nh as i32;
+        w.monitor_left = nl;
+        w.monitor_top = nt;
+        w.screen_w = nw as i32;
+        w.screen_h = nh as i32;
 
         w.wgpu.recreate_frame_texture(nw, nh);
         w.last_frame = None; // force re-upload on next frame
 
         if snap.mode == DisplayMode::Fullscreen {
             let rect = RECT {
-                left:   nl,
-                top:    nt,
-                right:  nl + nw as i32,
+                left: nl,
+                top: nt,
+                right: nl + nw as i32,
                 bottom: nt + nh as i32,
             };
             w.wgpu.resize(nw, nh);
@@ -461,8 +470,8 @@ fn on_timer(hwnd: HWND) {
         let w = b.as_mut().unwrap();
 
         // Frame-rate-independent lerp toward actual cursor.
-        let now   = Instant::now();
-        let dt    = now.duration_since(w.last_tick).as_secs_f32();
+        let now = Instant::now();
+        let dt = now.duration_since(w.last_tick).as_secs_f32();
         w.last_tick = now;
         let alpha = 1.0_f32 - (1.0 - snap.smooth_speed).powf(dt * 60.0);
         w.smooth_x += (cursor.x as f32 - w.smooth_x) * alpha;
@@ -470,7 +479,7 @@ fn on_timer(hwnd: HWND) {
 
         // Convert smoothed cursor to monitor-local coordinates (DXGI frame origin = 0,0).
         let cx = w.smooth_x - w.monitor_left as f32;
-        let cy = w.smooth_y - w.monitor_top  as f32;
+        let cy = w.smooth_y - w.monitor_top as f32;
 
         let cur_sw = w.screen_w;
         let cur_sh = w.screen_h;
@@ -482,11 +491,14 @@ fn on_timer(hwnd: HWND) {
         let src_h = (win_h as f32 / snap.zoom).min(fh);
         let src_x = (cx - src_w * 0.5).clamp(0.0, fw - src_w);
         let src_y = (cy - src_h * 0.5).clamp(0.0, fh - src_h);
-        let crop  = [src_x / fw, src_y / fh, src_w / fw, src_h / fh];
+        let crop = [src_x / fw, src_y / fh, src_w / fw, src_h / fh];
 
         // Upload frame only when the capture thread has produced a new Arc<Frame>.
         if let Some(frame) = &snap.frame {
-            let new_frame = w.last_frame.as_ref().map_or(true, |last| !Arc::ptr_eq(last, frame));
+            let new_frame = w
+                .last_frame
+                .as_ref()
+                .map_or(true, |last| !Arc::ptr_eq(last, frame));
             if new_frame {
                 w.wgpu.upload_frame(&frame.data, frame.width, frame.height);
                 w.last_frame = Some(Arc::clone(frame));
@@ -498,20 +510,21 @@ fn on_timer(hwnd: HWND) {
         let cursor_y = ((cy - src_y) / src_h * win_h as f32).clamp(0.0, win_h as f32 - 1.0) as u32;
 
         // Write uniforms only when crop, settings, or cursor have changed.
-        let color_mode  = snap.color_filter.as_u32();
+        let color_mode = snap.color_filter.as_u32();
         let interp_mode = snap.interpolation.as_u32();
         if crop != w.last_crop
-            || color_mode  != w.last_color_mode
+            || color_mode != w.last_color_mode
             || interp_mode != w.last_interp_mode
-            || cursor_x    != w.last_cursor_x
-            || cursor_y    != w.last_cursor_y
+            || cursor_x != w.last_cursor_x
+            || cursor_y != w.last_cursor_y
         {
-            w.wgpu.write_uniforms(crop, color_mode, interp_mode, cursor_x, cursor_y);
-            w.last_crop        = crop;
-            w.last_color_mode  = color_mode;
+            w.wgpu
+                .write_uniforms(crop, color_mode, interp_mode, cursor_x, cursor_y);
+            w.last_crop = crop;
+            w.last_color_mode = color_mode;
             w.last_interp_mode = interp_mode;
-            w.last_cursor_x    = cursor_x;
-            w.last_cursor_y    = cursor_y;
+            w.last_cursor_x = cursor_x;
+            w.last_cursor_y = cursor_y;
         }
 
         if !w.wgpu.render() {
@@ -526,22 +539,27 @@ fn on_timer(hwnd: HWND) {
 
 fn window_dims(mode: DisplayMode, panel_size: u32, sw: i32, sh: i32) -> (u32, u32) {
     match mode {
-        DisplayMode::Fullscreen                               => (sw as u32, sh as u32),
-        DisplayMode::Docked(Edge::Top | Edge::Bottom)        => (sw as u32, panel_size),
-        DisplayMode::Docked(Edge::Left | Edge::Right)        => (panel_size, sh as u32),
+        DisplayMode::Fullscreen => (sw as u32, sh as u32),
+        DisplayMode::Docked(Edge::Top | Edge::Bottom) => (sw as u32, panel_size),
+        DisplayMode::Docked(Edge::Left | Edge::Right) => (panel_size, sh as u32),
     }
 }
 
 fn rect_dims(r: RECT) -> (u32, u32) {
-    ((r.right - r.left).max(16) as u32, (r.bottom - r.top).max(16) as u32)
+    (
+        (r.right - r.left).max(16) as u32,
+        (r.bottom - r.top).max(16) as u32,
+    )
 }
 
 fn move_window(hwnd: HWND, r: RECT) {
     unsafe {
         SetWindowPos(
-            hwnd, None,
-            r.left, r.top,
-            r.right  - r.left,
+            hwnd,
+            None,
+            r.left,
+            r.top,
+            r.right - r.left,
             r.bottom - r.top,
             SWP_NOZORDER | SWP_NOACTIVATE,
         )
