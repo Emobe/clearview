@@ -213,6 +213,7 @@ fn handle_appbar_callback(hwnd: HWND, wparam: WPARAM) {
     });
     let Some((edge, thickness, sw, sh)) = params else { return };
 
+    // Borrow is dropped — safe to call SetWindowPos.
     let rect = appbar::reposition(hwnd, edge, thickness, sw, sh);
     move_window(hwnd, rect);
     WIN_DATA.with(|d| {
@@ -238,9 +239,11 @@ fn on_timer(hwnd: HWND) {
         cur_mode:       DisplayMode,
         cur_panel_size: u32,
         appbar_active:  bool,
-        screen_w:     i32,
-        screen_h:     i32,
-        callback_msg: u32,
+        screen_w:       i32,
+        screen_h:       i32,
+        monitor_left:   i32,
+        monitor_top:    i32,
+        callback_msg:   u32,
     }
 
     let snap = WIN_DATA.with(|d| {
@@ -261,8 +264,10 @@ fn on_timer(hwnd: HWND) {
             cur_mode:       w.cur_mode,
             cur_panel_size: w.cur_panel_size,
             appbar_active:  w.appbar_active,
-            screen_w:   w.screen_w,
-            screen_h:   w.screen_h,
+            screen_w:     w.screen_w,
+            screen_h:     w.screen_h,
+            monitor_left: w.monitor_left,
+            monitor_top:  w.monitor_top,
             callback_msg: w.callback_msg,
         })
     });
@@ -282,6 +287,8 @@ fn on_timer(hwnd: HWND) {
 
     let mut new_appbar_active = snap.appbar_active;
     let mut new_rect: Option<RECT> = None;
+    // cursor hide/show: +1 = hide, -1 = show, 0 = no change
+    let mut cursor_delta: i32 = 0;
 
     if need_transition {
         if enabled_changed && !snap.enabled {
@@ -291,15 +298,11 @@ fn on_timer(hwnd: HWND) {
                 new_appbar_active = false;
             }
             unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
-            // Restore hardware cursor.
-            WIN_DATA.with(|d| {
-                if let Some(w) = d.borrow_mut().as_mut() {
-                    if w.cursor_hidden {
-                        unsafe { ShowCursor(true); }
-                        w.cursor_hidden = false;
-                    }
-                }
+            // Decide whether to restore hardware cursor (need current state).
+            let hidden = WIN_DATA.with(|d| {
+                d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
             });
+            if hidden { cursor_delta = -1; }
 
         } else if enabled_changed && snap.enabled {
             // ── Enabling ──────────────────────────────────────────────────
@@ -309,35 +312,23 @@ fn on_timer(hwnd: HWND) {
             }
             match snap.mode {
                 DisplayMode::Fullscreen => {
-                    // Use the currently-active monitor's rect.
-                    let (ml, mt) = WIN_DATA.with(|d| {
-                        let b = d.borrow();
-                        let w = b.as_ref().unwrap();
-                        (w.monitor_left, w.monitor_top)
-                    });
+                    let ml = snap.monitor_left;
+                    let mt = snap.monitor_top;
                     let rect = RECT { left: ml, top: mt, right: ml + sw, bottom: mt + sh };
-                    move_window(hwnd, rect);
                     new_rect = Some(rect);
                 }
                 DisplayMode::Docked(e) => {
                     let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
-                    move_window(hwnd, rect);
-                    new_appbar_active = true;
                     new_rect = Some(rect);
+                    new_appbar_active = true;
                 }
             }
-            // Hide hardware cursor only in fullscreen mode.
             if snap.mode == DisplayMode::Fullscreen {
-                WIN_DATA.with(|d| {
-                    if let Some(w) = d.borrow_mut().as_mut() {
-                        if !w.cursor_hidden {
-                            unsafe { ShowCursor(false); }
-                            w.cursor_hidden = true;
-                        }
-                    }
+                let hidden = WIN_DATA.with(|d| {
+                    d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
                 });
+                if !hidden { cursor_delta = 1; }
             }
-            unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
 
         } else if snap.enabled && mode_changed {
             // ── Mode change while enabled ─────────────────────────────────
@@ -347,38 +338,23 @@ fn on_timer(hwnd: HWND) {
             }
             match snap.mode {
                 DisplayMode::Fullscreen => {
-                    let (ml, mt) = WIN_DATA.with(|d| {
-                        let b = d.borrow();
-                        let w = b.as_ref().unwrap();
-                        (w.monitor_left, w.monitor_top)
-                    });
+                    let ml = snap.monitor_left;
+                    let mt = snap.monitor_top;
                     let rect = RECT { left: ml, top: mt, right: ml + sw, bottom: mt + sh };
-                    move_window(hwnd, rect);
                     new_rect = Some(rect);
-                    // Switching to fullscreen — hide hardware cursor.
-                    WIN_DATA.with(|d| {
-                        if let Some(w) = d.borrow_mut().as_mut() {
-                            if !w.cursor_hidden {
-                                unsafe { ShowCursor(false); }
-                                w.cursor_hidden = true;
-                            }
-                        }
+                    let hidden = WIN_DATA.with(|d| {
+                        d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
                     });
+                    if !hidden { cursor_delta = 1; }
                 }
                 DisplayMode::Docked(e) => {
                     let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
-                    move_window(hwnd, rect);
-                    new_appbar_active = true;
                     new_rect = Some(rect);
-                    // Switching to docked — restore hardware cursor.
-                    WIN_DATA.with(|d| {
-                        if let Some(w) = d.borrow_mut().as_mut() {
-                            if w.cursor_hidden {
-                                unsafe { ShowCursor(true); }
-                                w.cursor_hidden = false;
-                            }
-                        }
+                    new_appbar_active = true;
+                    let hidden = WIN_DATA.with(|d| {
+                        d.borrow().as_ref().map(|w| w.cursor_hidden).unwrap_or(false)
                     });
+                    if hidden { cursor_delta = -1; }
                 }
             }
 
@@ -386,9 +362,23 @@ fn on_timer(hwnd: HWND) {
             // ── Panel size change while docked ────────────────────────────
             if let DisplayMode::Docked(e) = snap.mode {
                 let rect = appbar::reposition(hwnd, e, snap.panel_size as i32, sw, sh);
-                move_window(hwnd, rect);
                 new_rect = Some(rect);
             }
+        }
+
+        // ── move_window outside any WIN_DATA borrow ───────────────────────
+        if let Some(rect) = new_rect {
+            move_window(hwnd, rect);
+        }
+
+        // ── ShowWindow (only on enable/disable) ───────────────────────────
+        if enabled_changed && snap.enabled {
+            unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
+        }
+
+        // ── ShowCursor after all window calls are done ────────────────────
+        if cursor_delta != 0 {
+            unsafe { ShowCursor(cursor_delta > 0); } // false = hide, true = show
         }
 
         // ── Write back tracking state + resize wgpu surface ──────────────
@@ -399,6 +389,8 @@ fn on_timer(hwnd: HWND) {
             w.cur_mode       = snap.mode;
             w.cur_panel_size = snap.panel_size;
             w.appbar_active  = new_appbar_active;
+            if cursor_delta == 1  { w.cursor_hidden = true;  }
+            if cursor_delta == -1 { w.cursor_hidden = false; }
             if let Some(rect) = new_rect {
                 let (rw, rh) = rect_dims(rect);
                 w.wgpu.resize(rw, rh);
@@ -412,49 +404,61 @@ fn on_timer(hwnd: HWND) {
     let mut cursor = windows::Win32::Foundation::POINT::default();
     unsafe { let _ = GetCursorPos(&mut cursor); }
 
-    WIN_DATA.with(|d| {
+    // ── Monitor follow: collect switch rect before taking the main borrow ───
+    // We compute the move rect here (outside WIN_DATA borrow) so that
+    // move_window → SetWindowPos → wnd_proc re-entry cannot deadlock.
+    let monitor_move_rect: Option<RECT> = WIN_DATA.with(|d| {
         let mut b = d.borrow_mut();
         let w = b.as_mut().unwrap();
 
-        // ── Monitor follow: detect if the cursor moved to a different monitor ──
-        if let Some(target) = w.outputs.iter().find(|o| {
+        let target = w.outputs.iter().find(|o| {
             cursor.x >= o.left
                 && cursor.x < o.left + o.width  as i32
                 && cursor.y >= o.top
                 && cursor.y < o.top  + o.height as i32
-        }) {
-            if target.idx != w.active_output_idx {
-                let new_idx = target.idx;
-                let nl = target.left;
-                let nt = target.top;
-                let nw = target.width;
-                let nh = target.height;
+        });
+        let Some(target) = target else { return None };
+        if target.idx == w.active_output_idx { return None; }
 
-                // Signal capture thread to switch output.
-                w.desired_output.store(new_idx, Ordering::Relaxed);
-                w.active_output_idx = new_idx;
-                w.monitor_left  = nl;
-                w.monitor_top   = nt;
-                w.screen_w      = nw as i32;
-                w.screen_h      = nh as i32;
+        let new_idx = target.idx;
+        let nl = target.left;
+        let nt = target.top;
+        let nw = target.width;
+        let nh = target.height;
 
-                // Recreate the GPU frame texture for the new resolution.
-                w.wgpu.recreate_frame_texture(nw, nh);
-                w.last_frame = None; // force re-upload on next frame
+        w.desired_output.store(new_idx, Ordering::Relaxed);
+        w.active_output_idx = new_idx;
+        w.monitor_left      = nl;
+        w.monitor_top       = nt;
+        w.screen_w          = nw as i32;
+        w.screen_h          = nh as i32;
 
-                // In fullscreen mode, move the window to cover the new monitor.
-                if snap.enabled && snap.mode == DisplayMode::Fullscreen {
-                    let rect = RECT {
-                        left:   nl,
-                        top:    nt,
-                        right:  nl + nw as i32,
-                        bottom: nt + nh as i32,
-                    };
-                    move_window(hwnd, rect);
-                    w.wgpu.resize(nw, nh);
-                }
-            }
+        w.wgpu.recreate_frame_texture(nw, nh);
+        w.last_frame = None; // force re-upload on next frame
+
+        if snap.mode == DisplayMode::Fullscreen {
+            let rect = RECT {
+                left:   nl,
+                top:    nt,
+                right:  nl + nw as i32,
+                bottom: nt + nh as i32,
+            };
+            w.wgpu.resize(nw, nh);
+            Some(rect)
+        } else {
+            None
         }
+    });
+
+    // SetWindowPos is called here — borrow fully released, no re-entrancy risk.
+    if let Some(rect) = monitor_move_rect {
+        move_window(hwnd, rect);
+    }
+
+    // ── Main render: lerp, crop, upload, uniforms, present ──────────────────
+    WIN_DATA.with(|d| {
+        let mut b = d.borrow_mut();
+        let w = b.as_mut().unwrap();
 
         // Frame-rate-independent lerp toward actual cursor.
         let now   = Instant::now();
