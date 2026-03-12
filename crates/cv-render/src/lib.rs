@@ -1,7 +1,15 @@
 mod appbar;
 mod gfx;
 
-use std::{cell::RefCell, mem::size_of, sync::Arc, time::Instant};
+use std::{
+    cell::RefCell,
+    mem::size_of,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::Instant,
+};
 
 use windows::{
     core::w,
@@ -10,10 +18,10 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
-            GetSystemMetrics, LoadCursorW, LWA_ALPHA, PostQuitMessage, RegisterClassExW,
+            LoadCursorW, LWA_ALPHA, PostQuitMessage, RegisterClassExW,
             RegisterWindowMessageW, SetLayeredWindowAttributes, SetTimer,
             SetWindowDisplayAffinity, SetWindowPos, ShowCursor, ShowWindow, TranslateMessage,
-            WDA_EXCLUDEFROMCAPTURE, HTTRANSPARENT, IDC_ARROW, MSG, SM_CXSCREEN, SM_CYSCREEN,
+            WDA_EXCLUDEFROMCAPTURE, HTTRANSPARENT, IDC_ARROW, MSG,
             SW_HIDE, SW_SHOW, WM_DESTROY, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW,
             WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
             SWP_NOACTIVATE, SWP_NOZORDER,
@@ -21,7 +29,7 @@ use windows::{
     },
 };
 
-use cv_core::{ColorFilter, DisplayMode, Edge, Frame, FrameState, Interpolation, SharedState};
+use cv_core::{ColorFilter, DisplayMode, Edge, Frame, FrameState, Interpolation, OutputInfo, SharedState};
 use gfx::WgpuState;
 
 struct WindowData {
@@ -31,8 +39,18 @@ struct WindowData {
     smooth_x:       f32,
     smooth_y:       f32,
     last_tick:      Instant,
+    /// All monitors enumerated at startup (virtual-screen coords).
+    outputs:        Vec<OutputInfo>,
+    /// Index into `outputs` for the currently-active monitor.
+    active_output_idx: u32,
+    /// Top-left of the active monitor in virtual screen coordinates.
+    monitor_left:   i32,
+    monitor_top:    i32,
+    /// Width/height of the active monitor.
     screen_w:       i32,
     screen_h:       i32,
+    /// Shared with the capture thread — signals which output to duplicate.
+    desired_output: Arc<AtomicU32>,
     callback_msg:   u32,
     // Change-detection: what is currently applied to the window.
     cur_enabled:    bool,
@@ -46,7 +64,7 @@ struct WindowData {
     last_interp_mode: u32,
     last_cursor_x:    u32,
     last_cursor_y:    u32,
-    // Software cursor — hardware cursor state and window origin.
+    // Software cursor — hardware cursor state.
     cursor_hidden:    bool,
 }
 
@@ -55,10 +73,18 @@ thread_local! {
 }
 
 /// Creates the overlay window and blocks on its message loop.
-pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
-    let (screen_w, screen_h) = unsafe {
-        (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))
-    };
+pub fn run_overlay(
+    frame_state:    FrameState,
+    app_state:      SharedState,
+    outputs:        Vec<OutputInfo>,
+    desired_output: Arc<AtomicU32>,
+) {
+    // Use primary monitor (first in list) as the starting monitor.
+    let primary = outputs.first().cloned().unwrap_or(OutputInfo {
+        idx: 0, left: 0, top: 0, width: 1920, height: 1080,
+    });
+    let screen_w = primary.width  as i32;
+    let screen_h = primary.height as i32;
 
     let hwnd = unsafe {
         let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
@@ -79,7 +105,7 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
             class_name,
             w!("clear-view"),
             WS_POPUP, // starts hidden
-            0, 0, screen_w, screen_h,
+            primary.left, primary.top, screen_w, screen_h,
             None, None, Some(hinstance), None,
         )
         .expect("CreateWindowExW failed");
@@ -91,19 +117,24 @@ pub fn run_overlay(frame_state: FrameState, app_state: SharedState) {
 
     let callback_msg = unsafe { RegisterWindowMessageW(w!("ClearViewAppBar")) };
 
-    // wgpu init (blocking) — window starts fullscreen-sized.
+    // wgpu init (blocking) — window starts primary-monitor-sized.
     let wgpu = WgpuState::new(hwnd, screen_w as u32, screen_h as u32,
-                               screen_w as u32, screen_h as u32);
+                               primary.width, primary.height);
 
     WIN_DATA.with(|d| {
         *d.borrow_mut() = Some(WindowData {
             wgpu,
             frame_state,
             app_state,
-            smooth_x:       screen_w as f32 / 2.0,
-            smooth_y:       screen_h as f32 / 2.0,
+            smooth_x:       screen_w as f32 / 2.0 + primary.left as f32,
+            smooth_y:       screen_h as f32 / 2.0 + primary.top  as f32,
             last_tick:      Instant::now(),
+            active_output_idx: primary.idx,
+            monitor_left:   primary.left,
+            monitor_top:    primary.top,
             screen_w, screen_h,
+            outputs,
+            desired_output,
             callback_msg,
             cur_enabled:    false,
             cur_mode:       DisplayMode::Fullscreen,
@@ -145,7 +176,6 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Check if this is the appbar callback message.
     let callback_msg = WIN_DATA
         .with(|d| d.borrow().as_ref().map(|w| w.callback_msg))
         .unwrap_or(0);
@@ -279,7 +309,13 @@ fn on_timer(hwnd: HWND) {
             }
             match snap.mode {
                 DisplayMode::Fullscreen => {
-                    let rect = RECT { left: 0, top: 0, right: sw, bottom: sh };
+                    // Use the currently-active monitor's rect.
+                    let (ml, mt) = WIN_DATA.with(|d| {
+                        let b = d.borrow();
+                        let w = b.as_ref().unwrap();
+                        (w.monitor_left, w.monitor_top)
+                    });
+                    let rect = RECT { left: ml, top: mt, right: ml + sw, bottom: mt + sh };
                     move_window(hwnd, rect);
                     new_rect = Some(rect);
                 }
@@ -311,7 +347,12 @@ fn on_timer(hwnd: HWND) {
             }
             match snap.mode {
                 DisplayMode::Fullscreen => {
-                    let rect = RECT { left: 0, top: 0, right: sw, bottom: sh };
+                    let (ml, mt) = WIN_DATA.with(|d| {
+                        let b = d.borrow();
+                        let w = b.as_ref().unwrap();
+                        (w.monitor_left, w.monitor_top)
+                    });
+                    let rect = RECT { left: ml, top: mt, right: ml + sw, bottom: mt + sh };
                     move_window(hwnd, rect);
                     new_rect = Some(rect);
                     // Switching to fullscreen — hide hardware cursor.
@@ -375,6 +416,46 @@ fn on_timer(hwnd: HWND) {
         let mut b = d.borrow_mut();
         let w = b.as_mut().unwrap();
 
+        // ── Monitor follow: detect if the cursor moved to a different monitor ──
+        if let Some(target) = w.outputs.iter().find(|o| {
+            cursor.x >= o.left
+                && cursor.x < o.left + o.width  as i32
+                && cursor.y >= o.top
+                && cursor.y < o.top  + o.height as i32
+        }) {
+            if target.idx != w.active_output_idx {
+                let new_idx = target.idx;
+                let nl = target.left;
+                let nt = target.top;
+                let nw = target.width;
+                let nh = target.height;
+
+                // Signal capture thread to switch output.
+                w.desired_output.store(new_idx, Ordering::Relaxed);
+                w.active_output_idx = new_idx;
+                w.monitor_left  = nl;
+                w.monitor_top   = nt;
+                w.screen_w      = nw as i32;
+                w.screen_h      = nh as i32;
+
+                // Recreate the GPU frame texture for the new resolution.
+                w.wgpu.recreate_frame_texture(nw, nh);
+                w.last_frame = None; // force re-upload on next frame
+
+                // In fullscreen mode, move the window to cover the new monitor.
+                if snap.enabled && snap.mode == DisplayMode::Fullscreen {
+                    let rect = RECT {
+                        left:   nl,
+                        top:    nt,
+                        right:  nl + nw as i32,
+                        bottom: nt + nh as i32,
+                    };
+                    move_window(hwnd, rect);
+                    w.wgpu.resize(nw, nh);
+                }
+            }
+        }
+
         // Frame-rate-independent lerp toward actual cursor.
         let now   = Instant::now();
         let dt    = now.duration_since(w.last_tick).as_secs_f32();
@@ -382,9 +463,14 @@ fn on_timer(hwnd: HWND) {
         let alpha = 1.0_f32 - (1.0 - snap.smooth_speed).powf(dt * 60.0);
         w.smooth_x += (cursor.x as f32 - w.smooth_x) * alpha;
         w.smooth_y += (cursor.y as f32 - w.smooth_y) * alpha;
-        let (cx, cy) = (w.smooth_x, w.smooth_y);
 
-        let (win_w, win_h) = window_dims(snap.mode, snap.panel_size, sw, sh);
+        // Convert smoothed cursor to monitor-local coordinates (DXGI frame origin = 0,0).
+        let cx = w.smooth_x - w.monitor_left as f32;
+        let cy = w.smooth_y - w.monitor_top  as f32;
+
+        let cur_sw = w.screen_w;
+        let cur_sh = w.screen_h;
+        let (win_w, win_h) = window_dims(snap.mode, snap.panel_size, cur_sw, cur_sh);
 
         let fw = w.wgpu.tex_w as f32;
         let fh = w.wgpu.tex_h as f32;
@@ -426,7 +512,7 @@ fn on_timer(hwnd: HWND) {
 
         if !w.wgpu.render() {
             // Surface lost/outdated — reconfigure to recover.
-            let (rw, rh) = window_dims(snap.mode, snap.panel_size, sw, sh);
+            let (rw, rh) = window_dims(snap.mode, snap.panel_size, cur_sw, cur_sh);
             w.wgpu.resize(rw, rh);
         }
     });

@@ -221,6 +221,19 @@ impl WgpuState {
         })
     }
 
+    /// Replace the frame texture with one of a new size.
+    /// Called when switching to a monitor with different resolution.
+    pub fn recreate_frame_texture(&mut self, w: u32, h: u32) {
+        let (frame_tex, frame_view) = Self::make_frame_texture(&self.device, w, h);
+        self.bind_group = Self::make_bind_group(
+            &self.device, &self.bgl, &frame_view, &self.sampler, &self.uniform_buf,
+        );
+        self.frame_tex  = frame_tex;
+        self.frame_view = frame_view;
+        self.tex_w = w;
+        self.tex_h = h;
+    }
+
     /// Reconfigure the surface after a window resize.
     pub fn resize(&mut self, new_w: u32, new_h: u32) {
         let w = new_w.max(16);

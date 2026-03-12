@@ -1,7 +1,7 @@
 mod app;
 mod hotkey;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}};
 
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -15,15 +15,30 @@ fn main() -> eframe::Result {
     let shared = cv_core::new_shared();
     let frame_state: cv_core::FrameState = Arc::new(Mutex::new(None));
 
+    // Enumerate monitors once at startup.
+    let outputs = cv_capture::enumerate_outputs();
+
+    // Shared signal: render thread writes desired output index; capture thread reads it.
+    let desired_output = Arc::new(AtomicU32::new(0));
+
     // Capture thread: DXGI → CPU Vec<u8> → frame_state
     {
-        let frame_state = frame_state.clone();
+        let frame_state    = frame_state.clone();
+        let desired_output = desired_output.clone();
         std::thread::spawn(move || {
             let mut capturer = match cv_capture::Capturer::new() {
                 Ok(c) => c,
                 Err(e) => { eprintln!("[capture] init failed: {e}"); return; }
             };
             loop {
+                // Switch output if the render thread requested a different monitor.
+                let wanted = desired_output.load(Ordering::Relaxed);
+                if wanted != capturer.output_idx {
+                    if let Err(e) = capturer.switch_output(wanted) {
+                        eprintln!("[capture] switch_output({wanted}) failed: {e}");
+                    }
+                }
+
                 match capturer.next_frame(100) {
                     Ok(Some(frame)) => {
                         *frame_state.lock().unwrap() = Some(Arc::new(frame));
@@ -40,12 +55,13 @@ fn main() -> eframe::Result {
         });
     }
 
-    // Renderer thread: GDI fullscreen window, reads frame_state + app state
+    // Renderer thread: overlay window, reads frame_state + app state
     {
-        let frame_state = frame_state.clone();
-        let app_state = shared.clone();
+        let frame_state    = frame_state.clone();
+        let app_state      = shared.clone();
+        let desired_output = desired_output.clone();
         std::thread::spawn(move || {
-            cv_render::run_overlay(frame_state, app_state);
+            cv_render::run_overlay(frame_state, app_state, outputs, desired_output);
         });
     }
 
