@@ -232,13 +232,14 @@ fn handle_appbar_callback(hwnd: HWND, wparam: WPARAM) {
             return None;
         }
         match w.cur_mode {
-            DisplayMode::Docked(e) => Some((e, w.cur_panel_size as i32, w.screen_w, w.screen_h)),
+            DisplayMode::Docked(e) => Some((e, w.cur_panel_size, w.screen_w, w.screen_h)),
             _ => None,
         }
     });
-    let Some((edge, thickness, sw, sh)) = params else {
+    let Some((edge, panel_pct, sw, sh)) = params else {
         return;
     };
+    let thickness = panel_pct_to_px(panel_pct, match edge { Edge::Top | Edge::Bottom => sh, _ => sw });
 
     // Borrow is dropped — safe to call SetWindowPos.
     let rect = appbar::reposition(hwnd, edge, thickness, sw, sh);
@@ -338,7 +339,7 @@ fn on_timer(hwnd: HWND) {
                     });
                 }
                 DisplayMode::Docked(e) => {
-                    let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
+                    let rect = appbar::register(hwnd, e, panel_pct_to_px(snap.panel_size, match e { Edge::Top | Edge::Bottom => sh, _ => sw }), sw, sh, snap.callback_msg);
                     new_rect = Some(rect);
                     new_appbar_active = true;
                 }
@@ -359,7 +360,7 @@ fn on_timer(hwnd: HWND) {
                     });
                 }
                 DisplayMode::Docked(e) => {
-                    let rect = appbar::register(hwnd, e, snap.panel_size as i32, sw, sh, snap.callback_msg);
+                    let rect = appbar::register(hwnd, e, panel_pct_to_px(snap.panel_size, match e { Edge::Top | Edge::Bottom => sh, _ => sw }), sw, sh, snap.callback_msg);
                     new_rect = Some(rect);
                     new_appbar_active = true;
                 }
@@ -367,7 +368,7 @@ fn on_timer(hwnd: HWND) {
         } else if snap.enabled && panel_size_changed {
             // ── Panel size change while docked ────────────────────────────
             if let DisplayMode::Docked(e) = snap.mode {
-                let rect = appbar::reposition(hwnd, e, snap.panel_size as i32, sw, sh);
+                let rect = appbar::reposition(hwnd, e, panel_pct_to_px(snap.panel_size, match e { Edge::Top | Edge::Bottom => sh, _ => sw }), sw, sh);
                 new_rect = Some(rect);
             }
         }
@@ -537,11 +538,16 @@ fn on_timer(hwnd: HWND) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn window_dims(mode: DisplayMode, panel_size: u32, sw: i32, sh: i32) -> (u32, u32) {
+/// Convert a panel_size percentage (1–100) to pixels along the given screen dimension.
+fn panel_pct_to_px(pct: u32, dim: i32) -> i32 {
+    (dim * pct as i32 / 100).max(1)
+}
+
+fn window_dims(mode: DisplayMode, panel_pct: u32, sw: i32, sh: i32) -> (u32, u32) {
     match mode {
-        DisplayMode::Fullscreen => (sw as u32, sh as u32),
-        DisplayMode::Docked(Edge::Top | Edge::Bottom) => (sw as u32, panel_size),
-        DisplayMode::Docked(Edge::Left | Edge::Right) => (panel_size, sh as u32),
+        DisplayMode::Fullscreen                          => (sw as u32, sh as u32),
+        DisplayMode::Docked(Edge::Top | Edge::Bottom)   => (sw as u32, panel_pct_to_px(panel_pct, sh) as u32),
+        DisplayMode::Docked(Edge::Left | Edge::Right)   => (panel_pct_to_px(panel_pct, sw) as u32, sh as u32),
     }
 }
 

@@ -72,7 +72,7 @@ pub struct AppState {
     pub smooth_speed: f32,
     pub interpolation: Interpolation,
     pub display_mode: DisplayMode,
-    /// Panel thickness in pixels (50–800). Ignored in Fullscreen mode.
+    /// Panel size as a percentage of the relevant screen dimension (1–100). Ignored in Fullscreen mode.
     pub panel_size: u32,
     pub color_filter: ColorFilter,
 }
@@ -85,7 +85,7 @@ impl Default for AppState {
             smooth_speed: 0.15,
             interpolation: Interpolation::default(),
             display_mode: DisplayMode::Fullscreen,
-            panel_size: 300,
+            panel_size: 50,
             color_filter: ColorFilter::None,
         }
     }

@@ -63,8 +63,8 @@ impl eframe::App for ClearViewApp {
             if s.display_mode != DisplayMode::Fullscreen {
                 ui.add_space(4.0);
                 ui.add(
-                    egui::Slider::new(&mut s.panel_size, 50..=800)
-                        .text("Panel size (px)"),
+                    egui::Slider::new(&mut s.panel_size, 1..=100)
+                        .text("Panel size (%)"),
                 );
             }
 
