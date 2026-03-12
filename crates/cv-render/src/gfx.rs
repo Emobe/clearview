@@ -255,14 +255,16 @@ impl WgpuState {
     /// crop:        [src_x, src_y, src_w, src_h] normalised to [0, 1].
     /// color_mode:  ColorFilter::as_u32()   — 0=None,1=Inverted,2=Greyscale,3=GreyscaleInverted.
     /// interp_mode: Interpolation::as_u32() — 0=Bilinear, 1=Bicubic.
-    pub fn write_uniforms(&self, crop: [f32; 4], color_mode: u32, interp_mode: u32) {
+    /// cursor_x/y:  software cursor position in output window pixels.
+    pub fn write_uniforms(&self, crop: [f32; 4], color_mode: u32, interp_mode: u32, cursor_x: u32, cursor_y: u32) {
         let mut bytes = [0u8; 32];
         for (i, &f) in crop.iter().enumerate() {
             bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
         }
         bytes[16..20].copy_from_slice(&color_mode.to_ne_bytes());
         bytes[20..24].copy_from_slice(&interp_mode.to_ne_bytes());
-        // bytes[24..32] remain zero (padding)
+        bytes[24..28].copy_from_slice(&cursor_x.to_ne_bytes());
+        bytes[28..32].copy_from_slice(&cursor_y.to_ne_bytes());
         self.queue.write_buffer(&self.uniform_buf, 0, &bytes);
     }
 
