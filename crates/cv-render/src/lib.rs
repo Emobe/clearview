@@ -15,15 +15,17 @@ use windows::{
     Win32::{
         Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::{
-            CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos,
-            GetMessageW, HHOOK, HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, MSG,
-            PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_SHOW,
-            SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetLayeredWindowAttributes,
-            SetWindowsHookExW, SetTimer, SetWindowDisplayAffinity, SetWindowPos, ShowWindow,
-            TranslateMessage, UnhookWindowsHookEx, WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL,
-            WM_DESTROY, WM_MOUSEMOVE, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
-            WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+        UI::{
+            Magnification::{MagInitialize, MagShowSystemCursor, MagUninitialize},
+            WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
+                HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, MSG, PostQuitMessage,
+                RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
+                SWP_NOZORDER, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity,
+                SetWindowPos, ShowWindow, TranslateMessage, WDA_EXCLUDEFROMCAPTURE, WM_DESTROY,
+                WM_NCHITTEST, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+            },
         },
     },
     core::w,
@@ -66,19 +68,10 @@ struct WindowData {
     last_interp_mode: u32,
     last_cursor_x: u32,
     last_cursor_y: u32,
-    /// WH_MOUSE_LL hook active while overlay is enabled in fullscreen.
-    mouse_hook: Option<HHOOK>,
 }
 
 thread_local! {
     static WIN_DATA: RefCell<Option<WindowData>> = const { RefCell::new(None) };
-}
-
-unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && wparam.0 == WM_MOUSEMOVE as usize {
-        unsafe { SetCursor(None) };
-    }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 /// Creates the overlay window and blocks on its message loop.
@@ -171,9 +164,10 @@ pub fn run_overlay(
             last_interp_mode: u32::MAX, // forces first write
             last_cursor_x: u32::MAX,    // forces first write
             last_cursor_y: u32::MAX,    // forces first write
-            mouse_hook: None,
         });
     });
+
+    unsafe { MagInitialize() };
 
     unsafe { SetTimer(Some(hwnd), 1, 16, None) };
 
@@ -185,17 +179,16 @@ pub fn run_overlay(
         }
     }
 
-    // Clean up appbar and mouse hook on exit.
+    // Clean up appbar on exit.
     WIN_DATA.with(|d| {
-        if let Some(w) = d.borrow_mut().as_mut() {
+        if let Some(w) = d.borrow().as_ref() {
             if w.appbar_active {
                 appbar::unregister(hwnd);
             }
-            if let Some(hook) = w.mouse_hook.take() {
-                unsafe { let _ = UnhookWindowsHookEx(hook); }
-            }
         }
     });
+    unsafe { MagShowSystemCursor(true) };
+    unsafe { MagUninitialize() };
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -389,6 +382,10 @@ fn on_timer(hwnd: HWND) {
             unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
         }
 
+        // ── Cursor visibility via Magnification API ───────────────────────
+        let show_cursor = !(snap.enabled && snap.mode == DisplayMode::Fullscreen);
+        unsafe { MagShowSystemCursor(show_cursor) };
+
         // ── Write back tracking state + resize wgpu surface ──────────────
         WIN_DATA.with(|d| {
             let mut b = d.borrow_mut();
@@ -397,23 +394,6 @@ fn on_timer(hwnd: HWND) {
             w.cur_mode       = snap.mode;
             w.cur_panel_size = snap.panel_size;
             w.appbar_active  = new_appbar_active;
-
-            // Install or remove the low-level mouse hook based on new state.
-            let should_hook = snap.enabled && snap.mode == DisplayMode::Fullscreen;
-            match (should_hook, w.mouse_hook.is_some()) {
-                (true, false) => {
-                    w.mouse_hook = unsafe {
-                        SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), None, 0).ok()
-                    };
-                }
-                (false, true) => {
-                    if let Some(hook) = w.mouse_hook.take() {
-                        unsafe { let _ = UnhookWindowsHookEx(hook); }
-                    }
-                }
-                _ => {}
-            }
-
             if let Some(rect) = new_rect {
                 let (rw, rh) = rect_dims(rect);
                 w.wgpu.resize(rw, rh);
