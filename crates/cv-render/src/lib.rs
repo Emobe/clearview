@@ -377,8 +377,13 @@ fn on_timer(hwnd: HWND) {
         }
 
         // ── ShowCursor after all window calls are done ────────────────────
-        if cursor_delta != 0 {
-            unsafe { ShowCursor(cursor_delta > 0); } // false = hide, true = show
+        // ShowCursor uses an internal display counter, not a boolean.
+        // Loop until the counter crosses the threshold so a single call
+        // doesn't fail when the counter is already above/below target.
+        if cursor_delta < 0 {
+            unsafe { while ShowCursor(false) >= 0 {} }
+        } else if cursor_delta > 0 {
+            unsafe { while ShowCursor(true) < 0 {} }
         }
 
         // ── Write back tracking state + resize wgpu surface ──────────────
