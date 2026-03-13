@@ -18,13 +18,15 @@ use windows::{
         UI::{
             Magnification::{MagInitialize, MagShowSystemCursor, MagUninitialize},
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
-                HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, MSG, PostQuitMessage,
-                RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
-                SWP_NOZORDER, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity,
-                SetWindowPos, ShowWindow, TranslateMessage, WDA_EXCLUDEFROMCAPTURE, WM_DESTROY,
-                WM_NCHITTEST, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+                ClipCursor, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos,
+                GetMessageW, HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, LoadCursorW, MSG,
+                PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_SHOW,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetLayeredWindowAttributes,
+                SetTimer, SetWindowDisplayAffinity, SetWindowPos,
+                ShowWindow, SystemParametersInfoW, TranslateMessage, WDA_EXCLUDEFROMCAPTURE,
+                WM_DESTROY, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+                WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+                SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
             },
         },
     },
@@ -189,6 +191,7 @@ pub fn run_overlay(
     });
     unsafe { MagShowSystemCursor(true) };
     unsafe { MagUninitialize() };
+    update_clip_cursor(false);
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -387,6 +390,11 @@ fn on_timer(hwnd: HWND) {
         let show_cursor = !(snap.enabled && snap.mode == DisplayMode::Fullscreen);
         unsafe { MagShowSystemCursor(show_cursor) };
 
+        // ── Clip cursor to work area when docked, release otherwise ───────
+        // Called after appbar calls so SPI_GETWORKAREA reflects the new panel.
+        let docked = snap.enabled && matches!(snap.mode, DisplayMode::Docked(_));
+        update_clip_cursor(docked);
+
         // ── Write back tracking state + resize wgpu surface ──────────────
         WIN_DATA.with(|d| {
             let mut b = d.borrow_mut();
@@ -556,6 +564,26 @@ fn rect_dims(r: RECT) -> (u32, u32) {
         (r.right - r.left).max(16) as u32,
         (r.bottom - r.top).max(16) as u32,
     )
+}
+
+/// Clip the cursor to the current work area (docked) or release the clip (fullscreen/disabled).
+/// Must be called after appbar registration/repositioning so the work area is already updated.
+fn update_clip_cursor(clip: bool) {
+    unsafe {
+        if clip {
+            let mut work = RECT::default();
+            SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some(&mut work as *mut RECT as *mut _),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+            .ok();
+            let _ = ClipCursor(Some(&work));
+        } else {
+            let _ = ClipCursor(None);
+        }
+    }
 }
 
 fn move_window(hwnd: HWND, r: RECT) {
