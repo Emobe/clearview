@@ -390,11 +390,6 @@ fn on_timer(hwnd: HWND) {
         let show_cursor = !(snap.enabled && snap.mode == DisplayMode::Fullscreen);
         unsafe { MagShowSystemCursor(show_cursor) };
 
-        // ── Clip cursor to work area when docked, release otherwise ───────
-        // Called after appbar calls so SPI_GETWORKAREA reflects the new panel.
-        let docked = snap.enabled && matches!(snap.mode, DisplayMode::Docked(_));
-        update_clip_cursor(docked);
-
         // ── Write back tracking state + resize wgpu surface ──────────────
         WIN_DATA.with(|d| {
             let mut b = d.borrow_mut();
@@ -472,6 +467,9 @@ fn on_timer(hwnd: HWND) {
     if let Some(rect) = monitor_move_rect {
         move_window(hwnd, rect);
     }
+
+    // ── Clip cursor every tick while docked ───────────────────────────────
+    update_clip_cursor(matches!(snap.mode, DisplayMode::Docked(_)));
 
     // ── Main render: lerp, crop, upload, uniforms, present ──────────────────
     WIN_DATA.with(|d| {
