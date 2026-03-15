@@ -75,7 +75,7 @@ fn main() -> eframe::Result {
 
     // TTS thread: SAPI speech, MTA COM init
     let tts_shutdown = Arc::new(AtomicBool::new(false));
-    let tts_handle = cv_tts::spawn_tts_thread(tts_shutdown.clone());
+    let tts_handle = cv_tts::spawn_tts_thread(tts_shutdown.clone(), shared.clone());
 
     // egui settings panel on main thread
     let state_for_egui = shared.clone();

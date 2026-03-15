@@ -87,6 +87,30 @@ impl eframe::App for ClearViewApp {
                 ui.radio_value(&mut s.interpolation, Interpolation::Bilinear, "Bilinear");
                 ui.radio_value(&mut s.interpolation, Interpolation::Bicubic,  "Bicubic");
             });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.heading("Screen Reader");
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label("TTS");
+                let label = if s.tts_enabled { "On" } else { "Off" };
+                if ui.button(label).clicked() {
+                    s.tts_enabled = !s.tts_enabled;
+                }
+            });
+
+            ui.add_space(4.0);
+
+            ui.add_enabled(
+                s.tts_enabled,
+                egui::Slider::new(&mut s.tts_volume, 0..=100).text("Volume"),
+            );
+            ui.add_enabled(
+                s.tts_enabled,
+                egui::Slider::new(&mut s.tts_rate, -10..=10).text("Rate"),
+            );
         });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));

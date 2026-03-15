@@ -3,6 +3,9 @@ name    = "cv-tts"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+cv-core = { path = "../cv-core" }
+
 [dependencies.windows]
 workspace = true
 features = [
