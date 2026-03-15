@@ -7,6 +7,7 @@ edition = "2024"
 cv-core = { path = "../cv-core" }
 cv-capture = { path = "../cv-capture" }
 cv-render = { path = "../cv-render" }
+cv-tts = { path = "../cv-tts" }
 eframe = { workspace = true }
 egui = { workspace = true }
 windows = { workspace = true }

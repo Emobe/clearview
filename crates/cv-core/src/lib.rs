@@ -75,6 +75,12 @@ pub struct AppState {
     /// Panel size as a percentage of the relevant screen dimension (1–100). Ignored in Fullscreen mode.
     pub panel_size: u32,
     pub color_filter: ColorFilter,
+    /// Master TTS on/off switch.
+    pub tts_enabled: bool,
+    /// SAPI volume 0–100.
+    pub tts_volume: u32,
+    /// SAPI rate -10 to 10.
+    pub tts_rate: i32,
 }
 
 impl Default for AppState {
@@ -87,6 +93,9 @@ impl Default for AppState {
             display_mode: DisplayMode::Fullscreen,
             panel_size: 50,
             color_filter: ColorFilter::None,
+            tts_enabled: false,
+            tts_volume: 80,
+            tts_rate: 0,
         }
     }
 }

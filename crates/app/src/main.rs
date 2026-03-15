@@ -1,7 +1,7 @@
 mod app;
 mod hotkey;
 
-use std::sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU32, Ordering}};
 
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -73,9 +73,13 @@ fn main() -> eframe::Result {
         });
     }
 
+    // TTS thread: SAPI speech, MTA COM init
+    let tts_shutdown = Arc::new(AtomicBool::new(false));
+    let tts_handle = cv_tts::spawn_tts_thread(tts_shutdown.clone(), shared.clone());
+
     // egui settings panel on main thread
     let state_for_egui = shared.clone();
-    eframe::run_native(
+    let result = eframe::run_native(
         "clear-view settings",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
@@ -85,5 +89,10 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(app::ClearViewApp::new(cc, state_for_egui)))),
-    )
+    );
+
+    tts_shutdown.store(true, Ordering::Relaxed);
+    tts_handle.join().ok();
+
+    result
 }
