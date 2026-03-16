@@ -12,8 +12,8 @@ use windows::{
         CLSCTX_ALL, COINIT_MULTITHREADED,
     },
     Win32::UI::Accessibility::{
-        CUIAutomation8, IUIAutomation, IUIAutomationTextPattern,
-        UIA_CONTROLTYPE_ID, UIA_E_ELEMENTNOTAVAILABLE, UIA_TextPatternId,
+        CUIAutomation8, IUIAutomation,
+        UIA_CONTROLTYPE_ID, UIA_E_ELEMENTNOTAVAILABLE,
     },
     Win32::UI::WindowsAndMessaging::GetPhysicalCursorPos,
 };
@@ -136,23 +136,7 @@ pub fn spawn_tts_thread(
             let control_type = unsafe { element.CurrentControlType() }.unwrap_or(UIA_CONTROLTYPE_ID(0));
             println!("[tts] hover: {:?} (type {})", name, control_type.0);
 
-            // Update last_name regardless — so we don't re-speak the same element
-            // immediately when text focus leaves.
             last_name = name.clone();
-
-            // Suppress hover speech when a text-bearing element has focus (user is typing).
-            let text_focused = match unsafe { automation.GetFocusedElement() } {
-                Ok(focused_el) => unsafe {
-                    focused_el
-                        .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-                        .is_ok()
-                },
-                Err(_) => false,
-            };
-
-            if text_focused {
-                continue;
-            }
 
             unsafe {
                 let hstring = HSTRING::from(name.as_str());
