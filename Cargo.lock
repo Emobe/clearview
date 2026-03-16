@@ -80,6 +80,7 @@ dependencies = [
  "cv-capture",
  "cv-core",
  "cv-render",
+ "cv-tts",
  "eframe",
  "egui",
  "windows 0.62.2",
@@ -474,6 +475,14 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "wgpu",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "cv-tts"
+version = "0.1.0"
+dependencies = [
+ "cv-core",
  "windows 0.62.2",
 ]
 

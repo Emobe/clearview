@@ -105,6 +105,13 @@ impl eframe::App for ClearViewApp {
 
             ui.add_enabled(
                 s.tts_enabled,
+                egui::Checkbox::new(&mut s.tts_hover_enabled, "Hover echo"),
+            );
+
+            ui.add_space(4.0);
+
+            ui.add_enabled(
+                s.tts_enabled,
                 egui::Slider::new(&mut s.tts_volume, 0..=100).text("Volume"),
             );
             ui.add_enabled(
