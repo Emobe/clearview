@@ -6,7 +6,20 @@ pub struct ClearViewApp {
 }
 
 impl ClearViewApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, state: SharedState) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, state: SharedState) -> Self {
+        // Keep the event loop ticking at ~10 Hz even when the settings window is unfocused.
+        // Without this, eframe idles into ControlFlow::Wait — the write lock acquired in
+        // update() is never released and state.read() in the TTS thread blocks indefinitely.
+        // request_repaint_after() inside update() is unreliable for this because it captures
+        // cumulative_pass_nr at call time; if the window was focused and many frames rendered
+        // before the 100ms fires, the pass_nr check marks it stale and drops the repaint.
+        // Calling request_repaint() from a background thread always uses the current pass_nr.
+        let ctx = cc.egui_ctx.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            ctx.request_repaint();
+        });
+
         Self { state }
     }
 }
@@ -100,6 +113,13 @@ impl eframe::App for ClearViewApp {
                     s.tts_enabled = !s.tts_enabled;
                 }
             });
+
+            ui.add_space(4.0);
+
+            ui.add_enabled(
+                s.tts_enabled,
+                egui::Checkbox::new(&mut s.tts_hover_enabled, "Hover echo"),
+            );
 
             ui.add_space(4.0);
 
