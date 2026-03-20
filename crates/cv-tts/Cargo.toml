@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cv-core = { path = "../cv-core" }
+windows-core = "0.62"
 
 [dependencies.windows]
 workspace = true

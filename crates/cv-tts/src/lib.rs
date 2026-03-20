@@ -1,10 +1,11 @@
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use cv_core::SharedState;
 use windows::{
-    core::{w, HRESULT, HSTRING},
+    core::{w, HRESULT, HSTRING, Ref},
     Win32::Foundation::POINT,
     Win32::Media::Speech::{ISpVoice, SPF_ASYNC, SPF_PURGEBEFORESPEAK, SpVoice},
     Win32::System::Com::{
@@ -12,11 +13,75 @@ use windows::{
         CLSCTX_ALL, COINIT_MULTITHREADED,
     },
     Win32::UI::Accessibility::{
-        CUIAutomation8, IUIAutomation,
+        CUIAutomation8, IUIAutomation, IUIAutomationElement,
+        IUIAutomationFocusChangedEventHandler,
+        IUIAutomationFocusChangedEventHandler_Impl,
+        IUIAutomationTextPattern,
         UIA_CONTROLTYPE_ID, UIA_E_ELEMENTNOTAVAILABLE,
+        UIA_TextPatternId,
     },
     Win32::UI::WindowsAndMessaging::GetPhysicalCursorPos,
 };
+
+// ─── Internal message types ──────────────────────────────────────────────────
+
+#[derive(Debug)]
+enum Msg {
+    TextFocusGained,
+    TextFocusLost,
+}
+
+#[derive(Debug, PartialEq)]
+enum TtsMode {
+    Idle,
+    TextFocus,
+}
+
+// ─── UIA focus-change event handler ─────────────────────────────────────────
+
+/// Implements IUIAutomationFocusChangedEventHandler.
+/// Fires on a UIA-internal thread — only plain data sent over the channel.
+#[windows::core::implement(IUIAutomationFocusChangedEventHandler)]
+struct FocusHandler {
+    tx: mpsc::Sender<Msg>,
+    own_pid: i32,
+}
+
+impl IUIAutomationFocusChangedEventHandler_Impl for FocusHandler_Impl {
+    fn HandleFocusChangedEvent(
+        &self,
+        sender: Ref<IUIAutomationElement>,
+    ) -> windows::core::Result<()> {
+        // Null sender is legal — ignore silently.
+        let el = match sender.as_ref() {
+            Some(e) => e,
+            None => return Ok(()),
+        };
+
+        // Filter events from our own process (egui panel) to avoid noise.
+        if let Ok(pid) = unsafe { el.CurrentProcessId() } {
+            if pid == self.own_pid {
+                return Ok(());
+            }
+        }
+
+        // IUIAutomationTextPattern presence == text-bearing element.
+        let has_text = unsafe {
+            el.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+        }
+        .is_ok();
+
+        let _ = self.tx.send(if has_text {
+            Msg::TextFocusGained
+        } else {
+            Msg::TextFocusLost
+        });
+
+        Ok(())
+    }
+}
+
+// ─── Thread entry point ───────────────────────────────────────────────────────
 
 pub fn spawn_tts_thread(
     shutdown: Arc<AtomicBool>,
@@ -72,13 +137,54 @@ pub fn spawn_tts_thread(
             }
         };
 
+        // ── Stage 4: focus-change event handler ──────────────────────────────
+
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let own_pid = std::process::id() as i32;
+
+        let handler: IUIAutomationFocusChangedEventHandler =
+            FocusHandler { tx, own_pid }.into();
+
+        if let Err(e) = unsafe {
+            automation.AddFocusChangedEventHandler(
+                None::<&windows::Win32::UI::Accessibility::IUIAutomationCacheRequest>,
+                &handler,
+            )
+        } {
+            eprintln!("[tts] AddFocusChangedEventHandler failed: {e}");
+            // Non-fatal: hover still works; state machine stays in Idle.
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+
         let mut last_name = String::new();
+        let mut mode = TtsMode::Idle;
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
 
             if shutdown.load(Ordering::Relaxed) {
                 break;
+            }
+
+            // Drain all pending focus-change messages before any speech decisions.
+            loop {
+                match rx.try_recv() {
+                    Ok(Msg::TextFocusGained) => {
+                        if mode != TtsMode::TextFocus {
+                            mode = TtsMode::TextFocus;
+                            println!("[tts] mode → TextFocus");
+                        }
+                    }
+                    Ok(Msg::TextFocusLost) => {
+                        if mode != TtsMode::Idle {
+                            mode = TtsMode::Idle;
+                            println!("[tts] mode → Idle");
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                }
             }
 
             let (tts_enabled, tts_hover_enabled, volume, rate) = {
@@ -103,6 +209,11 @@ pub fn spawn_tts_thread(
             }
 
             if !tts_hover_enabled {
+                continue;
+            }
+
+            // Hover speech is suppressed while a text element has focus.
+            if mode == TtsMode::TextFocus {
                 continue;
             }
 
@@ -133,7 +244,8 @@ pub fn spawn_tts_thread(
                 continue;
             }
 
-            let control_type = unsafe { element.CurrentControlType() }.unwrap_or(UIA_CONTROLTYPE_ID(0));
+            let control_type =
+                unsafe { element.CurrentControlType() }.unwrap_or(UIA_CONTROLTYPE_ID(0));
             println!("[tts] hover: {:?} (type {})", name, control_type.0);
 
             last_name = name.clone();
@@ -150,7 +262,12 @@ pub fn spawn_tts_thread(
             }
         }
 
-        // Drop COM objects before CoUninitialize.
+        // Deregister before dropping COM objects.
+        if let Err(e) = unsafe { automation.RemoveFocusChangedEventHandler(&handler) } {
+            eprintln!("[tts] RemoveFocusChangedEventHandler failed: {e}");
+        }
+
+        drop(handler);
         drop(automation);
         drop(voice);
         unsafe { CoUninitialize() };
