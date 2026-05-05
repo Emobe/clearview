@@ -11,7 +11,21 @@
       "WebFetch(domain:microsoft.github.io)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build 2>&1 | grep -E \"^error\\\\[\")",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build 2>&1 | grep -E \"^error\")",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build 2>&1 | tail -5)",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build 2>&1 | grep -A 10 \"incompatible type for trait\")",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build 2>&1 | grep -v \"^warning\" | head -80)",
+      "Bash(cd:*)",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build -p cv-tts 2>&1 | grep -E \"^error\")",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build -p cv-tts 2>&1 | grep -E \"^error|^\\\\s+-->\" | head -40)",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build -p cv-tts 2>&1 | grep -A 10 \"mismatched types\" | head -40)",
+      "Bash(find:*)",
+      "Bash(grep -n \"pub struct Ref\\\\|impl Ref\\\\|fn as_ref\\\\|impl.*Deref.*for Ref\\\\|fn ok\\(\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-core-0.62.2/src/*.rs)",
+      "Bash(grep -n \"impl.*Param.*for Option\\\\|impl.*Param.*for.*None\" ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-core-0.62.2/src/*.rs)",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build -p cv-tts)",
+      "Bash(RUSTFLAGS=\"-Awarnings\" cargo build)"
     ]
   }
 }

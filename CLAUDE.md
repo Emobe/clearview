@@ -17,6 +17,8 @@ When running cargo build, suppress warnings with RUSTFLAGS="-Awarnings" cargo bu
 
 Windows-only. Will not compile on other platforms.
 
+Never merge branches to master automatically. Create branches and commit to them, but always stop and wait for explicit instruction before merging.
+
 ## Crate structure
 
 - `cv-core` — shared types: Frame, AppState, SharedState, DisplayMode
@@ -49,7 +51,6 @@ Four concurrent threads sharing `Arc<RwLock<AppState>>`:
 ## Dead ends — do not retry these approaches
 
 - **D3D11 shared device context**: Immediate context is single-threaded. Frames never rendered. Use CPU readback instead.
-- **ClipCursor**: Never use. Blocks user from part of the screen with no way to interact with content in that region.
 - **Mixing screen-space and frame-space coordinates**: Always ensure cursor coords and frame coords are in the same space before any layout math.
 - **GDI StretchBlt for rendering**: Was used in phase 1, replaced with wgpu in phase 2 for shader support.
 
@@ -74,3 +75,5 @@ Use the `windows` crate (not `winapi` or `windows-sys`). Add new features to the
 5. ⬜ Cursor enhancement (larger cursor, colour override, highlight halo)
 6. ⬜ Multi-monitor
 7. ⬜ TTS / screen reader (UIA for Chrome/Edge, IAccessible2 for Firefox, SAPI for speech — browser compatibility is a known complexity)
+
+For the TTS feature, read tts-plan.md before starting work
